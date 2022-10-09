@@ -1,0 +1,1587 @@
+local PathfindingService = game:GetService("PathfindingService")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+local BattleEvents = ReplicatedStorage:WaitForChild("GameOrg"):WaitForChild("BattleEvents")
+local ClientComm = ReplicatedStorage:WaitForChild("GameOrg"):WaitForChild("ClientComm")
+local GameManagementEvents = ReplicatedStorage:WaitForChild("GameOrg"):WaitForChild("GameManagementEvents")
+local DuelResult = BattleEvents:FindFirstChild("DuelResult")
+local CountKill = BattleEvents:WaitForChild("CountKill")
+
+local PhysicsService = game:GetService("PhysicsService")
+local StartGame = GameManagementEvents:FindFirstChild("StartGame")
+local CollectionService = game:GetService("CollectionService")
+local RunService = game:GetService("RunService")
+
+local terrainChecker = RaycastParams.new() -- whole
+terrainChecker.FilterType = Enum.RaycastFilterType.Whitelist
+terrainChecker.FilterDescendantsInstances = {workspace.Terrain}
+terrainChecker.IgnoreWater = true
+
+local function snapToTerrain(GoToPart)
+	local rayStart = Vector3.new(GoToPart.Position.X, 50, GoToPart.Position.Z)
+	local raycastResult = workspace:Raycast(rayStart, Vector3.new(0, -100, 0), terrainChecker)
+	if raycastResult then
+		GoToPart.Position = Vector3.new(GoToPart.Position.X, raycastResult.Position.Y+0.4, GoToPart.Position.Z)
+	end
+end
+
+local function getFlatMagnitude(pos1, pos2)
+	local flatPos1 = Vector3.new(pos1.X, 0, pos1.Z)
+	local flatPos2 = Vector3.new(pos2.X, 0, pos2.Z)
+	return (flatPos1 - flatPos2).Magnitude
+end
+local function isForward(base, target, value)
+	--print("oooh lah lah")
+	local forward = base.CFrame.lookVector
+	local targetPosition = target.Position
+	local displacement = target.Position - base.Position -- (direction)
+	local amountForward = forward:Dot(displacement)
+	if value == 1 then
+		if amountForward >=0 then
+			return true
+		else
+			return false
+		end
+	elseif value == 2 then
+		return amountForward
+	end
+end
+StartGame.Event:Connect(function()
+	--for _, Soldier in pairs(script.Parent:FindFirstChild("Dummies"):GetChildren()) do
+	for _, Soldier in pairs(CollectionService:GetTagged("SoldierR6")) do
+		if Soldier.Parent.Parent:IsA("Folder") then
+			local Soldier = Soldier
+			local human = Soldier.Humanoid
+			--local torso = Soldier.Torso
+			local humanroot = Soldier.HumanoidRootPart
+			local Moving = Soldier.Moving
+			local pathSource
+			--local AnimationsR6 = Soldier.AnimationsR6
+			local CurrentAnim = Soldier:FindFirstChild("CurrentAnim")
+			local myUnit = Soldier.Parent.Parent
+			local soldierType = myUnit.UnitFamily.Value
+			local Fighting = false
+			--local ghostPart = Soldier.TestPart
+			
+			local Moving = Soldier.Moving
+			local Jump = Soldier.Jump
+			local IsCaptain = Soldier.IsCaptain
+			local GoToPart = Soldier.GoToPart
+			local MoveToPart = Soldier.MoveToPart
+			
+			local Routing = Soldier.Routing
+			local InDuel = Soldier.InDuel
+			local Dead = Soldier.Dead
+			local Teleport =  Soldier.Teleport
+			--local AnimationsR6 = Soldier.AnimationsR6
+			local myUnitMarker = myUnit.UnitMarker
+			local myAnim = Soldier.CurrentAnim
+			local Check = BattleEvents:FindFirstChild("SoldierCheck")
+			local routed = false
+			local canJump = true
+			local pathId = nil
+			
+			local jumpConnection
+			
+			--local weaponSounds = humanroot:FindFirstChild("Weapon Sounds")
+			local unitCard = game.ReplicatedStorage.UnitCards:FindFirstChild(myUnit.UnitType.Value)
+			--local WeaponSounds = humanroot:FindFirstChild("Weapon Sounds"):GetChildren()
+			--[[for i, v in pairs(WeaponSounds) do
+				v.Parent = humanroot
+			end]]
+			local baseSpeed
+			local ourMeleeInst = Soldier.Melee
+			local ourMelee = 0
+			local Orders = Soldier.Orders
+			local MoveOrder = Orders.Move
+			local actionOn = false
+			local AttackOrder = Orders.Attack
+			local SetupOrder = Orders.Setup
+			local RoutOrder = Orders.Rout
+			local EndDuel = Orders.EndDuel
+			local TeleportOrder = Orders.Teleport
+			local CanFight = Soldier.CanFight
+			
+			local stuff = {}
+			
+			ourMelee = unitCard.Melee.Value
+			ourMeleeInst.Value = unitCard.Melee.Value
+
+			--pathfinding variables
+
+			local CaptainCommand = myUnit.CaptainCommand
+			local PositionParts = {Soldier.RiderDuelPosition, Soldier.SoldierDuelPosition}
+			local pathParams
+			local path
+			local waypoints 
+			local unitPath
+			local dist = 3
+			
+			Soldier.Humanoid:SetStateEnabled(Enum.HumanoidStateType.Climbing, true)
+			Soldier.Humanoid:SetStateEnabled(Enum.HumanoidStateType.FallingDown, false)
+			Soldier.Humanoid:SetStateEnabled(Enum.HumanoidStateType.Flying, false)
+			Soldier.Humanoid:SetStateEnabled(Enum.HumanoidStateType.Freefall, false)
+			Soldier.Humanoid:SetStateEnabled(Enum.HumanoidStateType.Swimming, false)
+			--?
+			Soldier.Humanoid:SetStateEnabled(Enum.HumanoidStateType.PlatformStanding, false)
+			Soldier.Humanoid:SetStateEnabled(Enum.HumanoidStateType.Landed, false)
+			Soldier.Humanoid:SetStateEnabled(Enum.HumanoidStateType.Jumping, false) --?
+			--Enabled.
+			Soldier.Humanoid:SetStateEnabled(Enum.HumanoidStateType.Dead, true)
+			Soldier.Humanoid:SetStateEnabled(Enum.HumanoidStateType.Running, false)
+			Soldier.Humanoid:SetStateEnabled(Enum.HumanoidStateType.RunningNoPhysics, false)
+			local function doDamage(humanoid, damage)
+				if humanoid.Health>0 and humanoid.Health - damage <= 0 then
+					CountKill:Fire(myUnit)
+				end
+				humanoid:TakeDamage(damage)
+				
+			end
+			local function checkUnit(unit, value)
+				return Check:Invoke(unit, value)
+			end
+			local function keepWaiting(position)
+				MoveToPart.Touched:Wait()
+				if getFlatMagnitude(humanroot.Position, position)<2 or position ~= MoveToPart.Position then
+					humanroot.BodyVelocity.Velocity = Vector3.new(0,0,0)
+					humanroot.Orientation = Vector3.new(humanroot.Orientation.X, MoveToPart.Orientation.Y, humanroot.Orientation.Z)
+					return
+				else
+					keepWaiting(position)
+				end
+			end
+			local function checkPath(soldierPos)
+				
+				local pathChecker = RaycastParams.new() -- whole
+				pathChecker.FilterType = Enum.RaycastFilterType.Blacklist
+				pathChecker.FilterDescendantsInstances = {myUnit.Parent, CollectionService:GetTagged("SoldierR6"), workspace.Terrain, workspace.GameObjects}
+				pathChecker.IgnoreWater = true
+				
+				for i = -1,1,1 do
+					local rayOrigin = Vector3.new(pathSource.Position.X, pathSource.Position.Y, pathSource.Position.Z)
+					rayOrigin = (pathSource.CFrame*CFrame.new(i*(pathSource.Size.X/2),-pathSource.Size.Y/2,0)).p
+					local rayGoal = (MoveToPart.CFrame*CFrame.new(i*(pathSource.Size.X/2),pathSource.Position.Y-MoveToPart.Position.Y-pathSource.Size.Y,0)).p
+					local rayDirection = rayGoal - rayOrigin
+					local raycastResult = workspace:Raycast(rayOrigin, rayDirection, pathChecker)
+					if raycastResult then
+						--print(raycastResult.Instance)
+						return 2
+					end
+					RunService.Heartbeat:Wait()
+				end
+				return 0
+			end
+			local function checkAim(enemy)
+				local pathChecker = RaycastParams.new() -- whole
+				pathChecker.FilterType = Enum.RaycastFilterType.Blacklist
+				pathChecker.FilterDescendantsInstances = {myUnit.Parent, CollectionService:GetTagged("SoldierR6"), workspace.Terrain, workspace.GameObjects}
+				pathChecker.IgnoreWater = true
+				--local parts = {"Head", "HumanoidRootPart", "Legs", "Body"}
+				local parts = {"Head"}
+				local startPos = (humanroot.CFrame*CFrame.new(0,1,-5)).p
+				for i, part in pairs(parts) do
+					local point = enemy.Parent:FindFirstChild(part)
+					if point then
+						--print("oh")
+						local rayOrigin = startPos
+						local rayGoal = point.Position
+						local rayDirection = rayGoal - rayOrigin
+						local raycastResult = workspace:Raycast(rayOrigin, rayDirection, pathChecker)
+						if not raycastResult then
+							print("can hit1")
+							return true
+						end
+						if raycastResult and raycastResult.Instance.CanCollide == false then
+							--print(raycastResult.Instance)
+							print("can hit2")
+							return true
+						end
+						RunService.Heartbeat:Wait()
+					end
+				end
+				print("cant hit")
+				return false
+			end
+			local function doAnim(anim)
+				CurrentAnim.Value = anim
+				wait()
+				CurrentAnim.Value = "."
+			end
+			local function moveToPoint(position, dist)
+				--humanroot.BodyGyro.CFrame = CFrame.new(humanroot.Position, position)
+				--[[if touchEvent then
+					touchEvent:Disconnect()
+				end
+				local direction = CFrame.new(humanroot.Position, position)
+				humanroot.CFrame = direction
+				humanroot.BodyVelocity.Velocity = Vector3.new(direction.LookVector.X, 0, direction.LookVector.Z)*10
+				local targetPos = position
+				local checkPos = position
+				local distance = getFlatMagnitude(humanroot.Position, position)
+				local count = distance/10
+				local newCount = math.floor(count)]]
+				--[[touchEvent = MoveToPart.Touched:Connect(function(hit)
+					--print(hit)
+					if hit.Parent == Soldier then
+						touchEvent:Disconnect()
+						humanroot.BodyVelocity.Velocity = Vector3.new(0,0,0)
+						humanroot.Orientation = Vector3.new(humanroot.Orientation.X, MoveToPart.Orientation.Y, humanroot.Orientation.Z)
+					end
+				end)]]
+				--keepWaiting(position)
+				--[[while getFlatMagnitude(humanroot.Position, position)>dist and targetPos == checkPos do
+					wait(0.2)
+					local checkPos = MoveToPart.Position
+				end]]
+				--humanroot.BodyGyro.CFrame = MoveToPart.CFrame
+			end
+			local function oldMove()
+				if jumpConnection then
+					jumpConnection:Disconnect()
+					jumpConnection = nil
+				end
+				if Dead.Value == true then return end
+				----print("New moveto event, " .. Soldier.Name .. ", " .. myUnit.Name .. ", " .. myUnit.Parent.Nation.Value)
+				----print(MoveToPart.Position)
+				--dist = (10 + human.HipHeight)+human.WalkSpeed/10
+				local timeTook
+				if IsCaptain.Value == true then
+					--timeTook = tick()
+					----print(timeTook)
+				end
+				dist = human.WalkSpeed*0.35
+				for i, part in pairs(PositionParts) do
+					part.Position = Vector3.new(part.Position.X, MoveToPart.Position.Y, part.Position.Z)
+					snapToTerrain(part)
+				end
+				local flatGoalPos = Vector3.new(MoveToPart.Position.X, 0, MoveToPart.Position.Z)
+				local flatRootPos = Vector3.new(humanroot.Position.X, 0, humanroot.Position.Z)
+				local firstdistance = (flatGoalPos - flatRootPos).magnitude
+				if firstdistance > 2 then
+					path = nil
+					local checkPathResult = checkPath()
+					if checkPathResult==2 then
+						----print("oooooooh")
+						
+						path:ComputeAsync(humanroot.position, MoveToPart.Position)
+						local currentPath = path
+						local waypoints = currentPath:GetWaypoints()
+						Moving.Value = true
+						local jumpWaypoints = {}
+						for i, thing in pairs(stuff) do
+							thing:Destroy()
+						end
+
+						stuff = {}
+
+						for i, waypoint in pairs(waypoints) do
+							local part = Instance.new("Part")
+							part.Anchored = true
+							part.Parent = workspace.GameObjects
+							part.Size = Vector3.new(1,1,1)
+							part.Position = waypoint.Position
+							part.CanCollide = false
+							table.insert(stuff, part)
+							if waypoint.Action == Enum.PathWaypointAction.Jump then
+								--print("nice")
+								table.insert(jumpWaypoints,i)
+							end
+						end
+						--[[local newPoints = {}
+						for i, point in pairs(jumpWaypoints) do
+							local newPoint = jumpWaypoints[i] - 2*math.ceil((human.WalkSpeed - 20)/10)
+							if newPoint < jumpWaypoints[i] then
+								jumpWaypoints[i] = newPoint
+							end
+							table.insert(newPoints,newPoint)
+						end]]
+						local nextJump = 1
+						for i, waypoint in pairs(waypoints) do
+							if path == currentPath then
+								if i == jumpWaypoints[nextJump] then
+									jumpConnection = RunService.Heartbeat:Connect(function()
+										if jumpConnection then
+											jumpConnection:Disconnect()
+											jumpConnection = nil
+										end
+										local curJump = nextJump
+										nextJump+=1
+										human.HipHeight = 1.5*human.HipHeight
+										--[[if newPoints[curJump] > jumpWaypoints[curJump] then
+											wait(0.3)
+										end]]
+										if Jump.Value == false then
+											Jump.Value = true
+										else
+											Jump.Value = false
+										end
+										wait(0.5)
+										PhysicsService:SetPartCollisionGroup(humanroot, "Soldiers")
+										wait(0.5)
+										PhysicsService:SetPartCollisionGroup(humanroot, "RootParts")
+
+										human.HipHeight = human.HipHeight*(2/3)
+
+									end)
+
+								end
+
+								--moveToPoint(waypoint.Position, dist)
+								--human.MoveToFinished:Wait()
+								if waypoints[i+2] then
+									human:MoveTo(waypoints[i+2].Position)
+								end
+								repeat 
+									local flatWayPos = Vector3.new(waypoint.Position.X, 0, waypoint.Position.Z)
+									local flatWayPos2 = Vector3.new(waypoint.Position.X, 0, waypoint.Position.Z)
+									if waypoints[i+2] then
+										flatWayPos2 = Vector3.new(waypoints[i+2].Position.X, 0, waypoints[i+2].Position.Z)
+									end
+									local flatRootPos = Vector3.new(humanroot.Position.X, 0, humanroot.Position.Z)
+									local distance = (flatWayPos - flatRootPos).magnitude
+									local distance2 = (flatWayPos2 - flatRootPos).magnitude
+									wait(0.1)
+								until
+								distance <= dist or distance2 <= dist
+							else return end
+						end
+					else
+						local targetPos = MoveToPart.Position
+						----print("No pathfinding needed")
+						Moving.Value = true
+						while getFlatMagnitude(targetPos, humanroot.Position) > 2 and targetPos == MoveToPart.Position do
+							human:MoveTo(targetPos)
+							wait(1)
+						end
+						--moveToPoint(MoveToPart.Position, dist)
+					end
+				end
+				local flatGoalPos = Vector3.new(MoveToPart.Position.X, 0, MoveToPart.Position.Z)
+				local flatRootPos = Vector3.new(humanroot.Position.X, 0, humanroot.Position.Z)
+				local distance = (flatGoalPos - flatRootPos).magnitude
+				if distance <= dist then
+					if jumpConnection then
+						jumpConnection:Disconnect()
+						jumpConnection = nil
+					end
+					Moving.Value = false
+					if IsCaptain.Value == true then
+						CaptainCommand:Fire("Captain")
+						--timeTook = tick()-timeTook
+						----print("done walking")
+						----print(timeTook)
+						----print("nice")
+					end
+					wait(0.5)
+					if Moving.Value == false then
+						--humanroot.CFrame = MoveToPart.CFrame*CFrame.new(0,humanroot.Position.Y-MoveToPart.Position.Y,0)
+						humanroot.Orientation = MoveToPart.Orientation
+					end
+				end
+				return
+			end
+			human.StateChanged:Connect(function(old,new)
+				if new == Enum.HumanoidStateType.Climbing and canJump then
+					canJump = false
+					if Jump.Value == false then
+						Jump.Value = true
+					else
+						Jump.Value = false
+					end
+					wait(0.5)
+					canJump = true
+				end
+			end)
+			MoveToPart:GetPropertyChangedSignal("Position"):Connect(function()
+				if jumpConnection then
+					jumpConnection:Disconnect()
+					jumpConnection = nil
+				end
+				if Dead.Value == true then return end
+				----print("New moveto event, " .. Soldier.Name .. ", " .. myUnit.Name .. ", " .. myUnit.Parent.Nation.Value)
+				----print(MoveToPart.Position)
+				--dist = (10 + human.HipHeight)+human.WalkSpeed/10
+				local timeTook
+				if IsCaptain.Value == true then
+					--timeTook = tick()
+					----print(timeTook)
+				end
+				dist = human.WalkSpeed*0.35
+				--[[for i, part in pairs(PositionParts) do
+					part.Position = Vector3.new(part.Position.X, MoveToPart.Position.Y, part.Position.Z)
+					snapToTerrain(part)
+				end]]
+				
+				local finalDest
+				
+				local routes = {}
+				
+				local withGroup = false
+				
+				local id = pathId
+				
+				local flatGoalPos = Vector3.new(MoveToPart.Position.X, 0, MoveToPart.Position.Z)
+				local flatRootPos = Vector3.new(humanroot.Position.X, 0, humanroot.Position.Z)
+				local firstDistance = (flatGoalPos - flatRootPos).Magnitude
+				local captainDistance = 1
+				local pathDistance = 0
+				local mainDistance = 40
+				if unitPath then
+					if unitPath[1] and unitPath[#unitPath] then
+						captainDistance = (unitPath[1].Position-unitPath[#unitPath].Position).Magnitude
+						pathDistance = (unitPath[#unitPath].Position - flatRootPos).Magnitude
+						mainDistance = (unitPath[1].Position-flatRootPos).Magnitude
+					end
+				end
+				local waypoints1
+				if not (human.WalkSpeed > 10 or firstDistance < 30 or (captainDistance>pathDistance and mainDistance > 30)) then
+					path:ComputeAsync(humanroot.Position, unitPath[1].Position)
+					waypoints1 = path:GetWaypoints()
+				end
+				if waypoints1==nil or #waypoints1>8 then
+					
+					--print(firstDistance)
+					--print(1)
+					--print(captainDistance>pathDistance)
+					--print(2)
+					--print(mainDistance)
+					--print(3)
+					--path = nil
+					local checkPathResult = checkPath()
+					if checkPathResult==2 then
+						----print("oooooooh")
+						path:ComputeAsync(humanroot.Position, MoveToPart.Position)
+						local selfroute = path:GetWaypoints()
+						Moving.Value = true
+						local jumpWaypoints = {}
+						for i, thing in pairs(stuff) do
+							thing:Destroy()
+						end
+						
+						stuff = {}
+						table.insert(routes,{unpack(selfroute)})
+						--[[for i, waypoint in pairs(selfroute) do
+							local part = Instance.new("Part")
+							part.Anchored = true
+							part.Parent = workspace.GameObjects
+							part.Size = Vector3.new(1,1,1)
+							part.Position = waypoint.Position
+							part.CanCollide = false
+							table.insert(stuff, part)
+							if waypoint.Action == Enum.PathWaypointAction.Jump then
+								--print("nice")
+								table.insert(jumpWaypoints,i)
+							end
+						end]]
+						--[[local newPoints = {}
+						for i, point in pairs(jumpWaypoints) do
+							local newPoint = jumpWaypoints[i] - 2*math.ceil((human.WalkSpeed - 20)/10)
+							if newPoint < jumpWaypoints[i] then
+								jumpWaypoints[i] = newPoint
+							end
+							table.insert(newPoints,newPoint)
+						end]]
+						table.insert(routes,unitPath)
+					else
+						local targetPos = MoveToPart.Position
+						----print("No pathfinding needed")
+						Moving.Value = true
+						while getFlatMagnitude(targetPos, humanroot.Position) > 2 and targetPos == MoveToPart.Position do
+							human:MoveTo(targetPos)
+							wait(1)
+						end
+						--moveToPoint(MoveToPart.Position, dist)
+					end
+				else
+					path:ComputeAsync(unitPath[#unitPath].Position, MoveToPart.Position)
+					local waypoints2 = path:GetWaypoints()
+					table.insert(routes,{unpack(waypoints1)})
+					table.insert(routes,unitPath)
+					table.insert(routes,{unpack(waypoints2)})
+					withGroup = true
+				end
+				for i, route in pairs(routes) do
+					Moving.Value = true
+					local nextJump = 1
+					local currentPath = route
+					waypoints = route
+					--print(unitPath[1])
+					local jumpWaypoints = {}
+					for j, waypoint in pairs(route) do
+						if waypoint~=MoveToPart then 
+							if waypoint.Action == Enum.PathWaypointAction.Jump then
+								--print("nice")
+								table.insert(jumpWaypoints,j)
+
+							end
+						end
+					end
+					for j, waypoint in pairs(route) do
+						if routes[2][#routes[2]] == unitPath[#unitPath] and id == pathId then
+							if j == jumpWaypoints[nextJump] then
+								jumpConnection = RunService.Heartbeat:Connect(function()
+									if jumpConnection then
+										jumpConnection:Disconnect()
+										jumpConnection = nil
+									end
+									local curJump = nextJump
+									nextJump+=1
+									--human.HipHeight = 1.5*human.HipHeight
+										--[[if newPoints[curJump] > jumpWaypoints[curJump] then
+											wait(0.3)
+										end]]
+									
+									--[[wait(0.5)
+									PhysicsService:SetPartCollisionGroup(humanroot, "Soldiers")
+									wait(0.5)
+									PhysicsService:SetPartCollisionGroup(humanroot, "RootParts")]]
+
+									--human.HipHeight = human.HipHeight*(2/3)
+
+								end)
+
+							end
+
+							--moveToPoint(waypoint.Position, dist)
+							--human.MoveToFinished:Wait()
+							if waypoint then
+								human:MoveTo(CFrame.new(waypoint.Position)*CFrame.new(0,humanroot.Position.Y-waypoint.Position.Y, 0).Position)
+							end
+							local reset = 0
+							repeat
+								if routes[2][#routes[2]] ~= unitPath[#unitPath] or id ~= pathId then return end
+								--clock:GetPropertyChangedSignal("Value"):Wait()
+								wait(0.2)
+								local flatWayPos = Vector3.new(waypoint.Position.X, 0, waypoint.Position.Z)
+								--local flatWayPos2 = Vector3.new(waypoint.Position.X, 0, waypoint.Position.Z)
+								--[[if route[i+2] then
+									flatWayPos2 = Vector3.new(route[i+2].Position.X, 0, route[i+2].Position.Z)
+								end]]
+								local flatRootPos = Vector3.new(humanroot.Position.X, 0, humanroot.Position.Z)
+								local distance = (flatWayPos - flatRootPos).magnitude
+								--local distance2 = (flatWayPos2 - flatRootPos).magnitude
+								reset +=1
+								if reset >= 20 then
+									print(tostring(id) .. ", " .. tostring(withGroup) .. ", " .. Soldier.Name .. ", " .. Soldier.Parent.Parent.Name .. ", " .. Soldier.Parent.Parent.Parent.Name .. ", " .. tostring(i) .. ", " .. tostring(j))
+									humanroot.CFrame = CFrame.new(waypoint.Position)*CFrame.new(0,humanroot.Position.Y-waypoint.Position.Y, 0)
+									
+									reset = 0
+									Teleport.Value = not Teleport.Value
+								end
+							until
+							distance <= dist --or distance2 <= dist
+						else return end
+					end
+					if not withGroup then break end
+				end
+				local flatGoalPos = Vector3.new(MoveToPart.Position.X, 0, MoveToPart.Position.Z)
+				local flatRootPos = Vector3.new(humanroot.Position.X, 0, humanroot.Position.Z)
+				local distance = (flatGoalPos - flatRootPos).magnitude
+				if distance <= dist then
+					if jumpConnection then
+						jumpConnection:Disconnect()
+						jumpConnection = nil
+					end
+					Moving.Value = false
+					if IsCaptain.Value == true then
+						CaptainCommand:Fire("Captain")
+						--timeTook = tick()-timeTook
+						----print("done walking")
+						----print(timeTook)
+						----print("nice")
+					end
+					wait(0.5)
+					if Moving.Value == false then
+						--humanroot.CFrame = MoveToPart.CFrame*CFrame.new(0,humanroot.Position.Y-MoveToPart.Position.Y,0)
+						humanroot.CFrame = MoveToPart.CFrame*CFrame.new(0,humanroot.Position.Y-MoveToPart.Position.Y,0)
+					end
+				end
+				
+				return
+				 end)
+			RoutOrder.Event:Connect(function(order)
+				--print("got rout event")
+				if order == "Start" then
+					routed = true
+					--human.WalkSpeed = baseSpeed*(3/2)
+					Routing.Value = 1
+				elseif order == "End" then
+					routed = false
+					--human.WalkSpeed = baseSpeed
+					Routing.Value = 2
+				else
+					--human.WalkSpeed = baseSpeed*(3/2)
+					Routing.Value = 3
+				end
+				return end)
+			
+			TeleportOrder.Event:Connect(function(order)
+				humanroot.CFrame = GoToPart.CFrame*CFrame.new(0,humanroot.Position.Y-MoveToPart.Position.Y,0)
+				MoveToPart.CFrame = GoToPart.CFrame
+				Teleport.Value = not Teleport.Value
+			end)
+			
+			if soldierType == "Infantry" then
+
+				--local weld = Soldier.Weapons:FindFirstChildOfClass("Model").WeldPart.Weld
+				--local myEffects = Soldier.Weapons:FindFirstChildOfClass("Model").Effects
+				--local Marching = myUnitMarker:FindFirstChild("Marching")
+				pathSource = humanroot
+				
+				local Charged = Soldier.Charged
+				local reload = 4
+				local Fired = Soldier.Fired
+				local Reloaded = Soldier.Reloaded
+				local BodyPos = Soldier.BodyPosition
+				local Ammunition = game.ReplicatedStorage.GamePieces.MusketShot
+				local deathChance
+				local trailColor = Color3.fromRGB(255,255,255)
+				if unitCard.Name == "Rifles" then
+					deathChance = 0.7
+					trailColor = Color3.fromRGB(255, 210, 178)
+				else
+					deathChance = 0.4
+				end
+				
+				--Events
+				local Orders = Soldier.Orders
+				local FireOrder =  Orders.Fire
+				local ReloadOrder = Orders.Reload
+				local KnockdownOrder = Orders.Knockdown
+				--local gunShotSound = myEffects:FindFirstChildOfClass("Sound")
+				--gunShotSound.PlaybackSpeed = 1.2 + math.random(1,4)*0.1
+				----print(gunShotSound.PlaybackSpeed)
+				--Setup data
+				baseSpeed = 10
+				local maxReload = 15
+				local baseDispersion = 0.25
+				local dispersionModifier = 0.25
+				local drop = 95/100
+				local stopped = false
+				
+				local reloadTime = unitCard.ReloadTime.Value
+				local dispersion = 0.5-(unitCard.Accuracy.Value/200)
+				local newDrop = (100-unitCard.Drop.Value)/100
+				local accuracy = unitCard.Accuracy.Value/200
+				local shotStat = unitCard.Accuracy.Value/100
+				local maxRange = unitCard.Range.Value
+				
+				pathParams = {["AgentRadius"] = 6, ["AgentHeight"] = 3, ["AgentCanJump"] = false, ["WaypointSpacing"] = 6}
+				path = PathfindingService:CreatePath(pathParams)
+				
+				local spot
+				
+				maxReload = reloadTime
+				baseDispersion = dispersion - 0.05
+				dispersionModifier = baseDispersion
+				drop = newDrop
+				--[[--print(Soldier.Weapons:FindFirstChildOfClass("Model"))
+				--print(baseDispersion)
+				--print(drop)]]
+
+				doAnim("Shoulder")
+				SetupOrder.Event:Connect(function(setupType, values)
+					----print("got it")
+					if setupType == "General" then
+						ourMelee = values[1]
+						ourMeleeInst.Value = values[1]
+					elseif setupType == "Infantry" then
+						maxReload = values[1]
+						baseDispersion = values[2] - 0.05
+						dispersionModifier = baseDispersion
+						drop = values[3]
+						----print(Soldier.Weapons:FindFirstChildOfClass("Model"))
+						----print(baseDispersion)
+						----print(drop)
+					end
+					return end)
+				Moving:GetPropertyChangedSignal("Value"):Connect(function()
+					if Dead.Value == true then return end
+					if Moving.Value == true then
+						--Marching.Volume = Marching.Volume + 0.012
+						--if not Fighting then Shoulder()end
+						
+						if InDuel.Value == false then
+							doAnim("Shoulder")
+							while Moving.Value == true and dispersionModifier < baseDispersion do
+								wait(1)
+								dispersionModifier += 0.01
+							end
+						end
+					else
+						--Marching.Volume = Marching.Volume - 0.012
+						--if not Fighting then Shoulder() end
+						
+						ReloadOrder:Fire()
+					end
+				end)
+				
+				--[[myEffects.Smoke:GetPropertyChangedSignal("Enabled"):Connect(function()
+					if Dead.Value == true then return end
+					wait(5.6)
+					local smoke = myEffects:FindFirstChild("Smoke")
+					if smoke then
+						smoke.Enabled = false
+					end
+				end)
+				myEffects:GetPropertyChangedSignal("Transparency"):Connect(function()
+					if Dead.Value == true then return end
+					wait(0.06)
+					myEffects.Transparency = 1
+				end)]]
+				MoveOrder.Event:Connect(function(disorder, waypoints, id)
+					if Dead.Value == true or getFlatMagnitude(humanroot.Position, GoToPart.Position) < 2 then return end
+					--GoToPart:GetPropertyChangedSignal("Position"):Connect(function()
+					pathId = id
+					while InDuel.Value == true or Charged.Value == true do
+						wait(0.5)
+						----print("wont let me move")
+					end
+					print(tostring(math.random()).. ", " .. Soldier.Name .. ", " .. Soldier.Parent.Parent.Name .. ", " .. Soldier.Parent.Parent.Parent.Name)
+					unitPath = waypoints
+					local xVary = math.random(-1,1)*math.random()*disorder
+					local zVary = math.random(-1,1)*math.random()*0.75
+					MoveToPart.CFrame = GoToPart.CFrame*CFrame.new(xVary,0,zVary)
+					----print(tostring(GoToPart.Position) .. ", ".. tostring(MoveToPart.Position) .. ", " .. Soldier.Name .. ", " .. myUnit.Name .. ", " .. myUnit.Parent.Nation.Value)
+					--if stopped then --print("Got here 2") end
+					--snapToTerrain(MoveToPart)
+				end)
+				Charged:GetPropertyChangedSignal("Value"):Connect(function()
+					if Dead.Value == true then return end
+					if Charged.Value == true then
+						--[[human.Sit = true]]--
+						--local goalPos = humanroot.CFrame
+						--goalPos = goalPos*CFrame.new(0,0,35)
+						--BodyPos.Position = goalPos.p
+						BodyPos.Parent = humanroot
+						doAnim("Fall")
+						wait(1.5)
+						BodyPos.Parent = Soldier
+						wait(1.5)
+						--human.Sit = false
+						Charged.Value = false
+					end
+				end)
+				InDuel:GetPropertyChangedSignal("Value"):Connect(function()
+					if Dead.Value == true then return end
+					doAnim("MeleeReady")
+					--CurrentAnim.Value = "MeleeReady"
+				end)
+				ReloadOrder.Event:Connect(function()
+					if Dead.Value == true then return end
+					if not actionOn and InDuel.Value == false then
+						while Moving.Value == false and not actionOn and not routed and reload > 0 and Dead.Value == false and InDuel.Value == false do
+							doAnim("Reload")
+							wait(1)
+							reload -= 1
+						end
+						if reload <= 0 then
+							Reloaded.Value = true
+						end
+						if Dead.Value == true then return end
+						doAnim("Shoulder")
+					end
+					return end)
+				FireOrder.Event:Connect(function(currentTarget)
+					if Dead.Value == true then return end
+					if routed or reload > 0 or InDuel.Value == true then return end
+					actionOn = true
+					if Moving.Value == true then
+						local count = 0
+						while Moving.Value == true do
+							wait(0.5)
+							count+=1
+							if count == 6 then return end
+						end
+					end
+					wait(1)
+					if InDuel.Value == true or reload >0 then return end
+					local enemySoldiers = currentTarget:FindFirstChild("Dummies"):GetChildren()
+					local randomSoldier = enemySoldiers[math.random(#enemySoldiers)]:FindFirstChild("HumanoidRootPart")
+					local enemyDistance = (humanroot.Position - randomSoldier.Position).Magnitude
+					local enemyDirection = CFrame.new(humanroot.Position, randomSoldier.Position)
+					if isForward(GoToPart, randomSoldier, 1) == false or checkAim(randomSoldier)==false then doAnim("Ready") return end
+					humanroot.CFrame = enemyDirection
+					doAnim("Aim")
+					wait(2+0.05*math.random(1,10))
+					if Moving.Value == true or InDuel.Value == true or randomSoldier.Parent:FindFirstChild("Dead").Value == true or reload > 0 then doAnim("Ready") return end
+					--Reloaded.Value = true
+					reload = maxReload+math.random(-1,1)*2
+					wait(0.1)
+					local Limbs = {"Head", "HumanoidRootPart", "HumanoidRootPart"}
+					local randomLimb = randomSoldier.Parent:FindFirstChild(Limbs[math.random(#Limbs)])
+					local target = randomSoldier.Parent:FindFirstChild("HumanoidRootPart")
+					local shot = Ammunition:Clone()
+					shot.Name = myUnit.Parent.Name
+					--local NoGravity = Instance.new("BodyForce")
+					--NoGravity.Parent = shot
+					--NoGravity.Force = Vector3.new(0, shot:GetMass()*workspace.Gravity*drop, 0)
+					shot.Force.Force = Vector3.new(0, shot:GetMass()*workspace.Gravity*drop, 0)
+					shot.CFrame = humanroot.CFrame*CFrame.new(0,1,-5)
+					shot.Unit.Value = myUnit.Name
+					shot.Team.Value = myUnit.Parent.Name
+					shot.Parent = workspace.GameObjects.Projectiles
+					shot.Chance.Value = deathChance
+					shot.Trail.Color = ColorSequence.new(trailColor)
+					----print(dispersionModifier+0.05)
+					
+					--[[local offset
+					if math.random()<accuracy then
+						offset = 0
+					else
+						local values = {-1,1}
+						offset = math.random()*humanroot.Size.X*values[math.random(#values)]
+					end]]
+					local yOff
+					local shotCalc = shotStat*(150/enemyDistance)
+					shotCalc = shotStat+0.3*((200-enemyDistance)/200)
+					local num
+					--print(enemyDistance)
+					if math.random() < shotStat then
+						num = math.random()
+						yOff = math.random(-1,1)*(target.Size.Y)
+						--print("hit")
+					else
+						num = 1+2*math.random()
+						yOff = math.random(-1,1)*(target.Size.Y)+math.random(-1,1)
+						--print("miss")
+					end
+					
+					local xOff = math.random(-1,1)*((target.Size.X/2)*num)
+					local zOff = math.random(-1,1)*((target.Size.Z/2)*num)
+					local shotGoal = target.CFrame*CFrame.new(xOff,yOff,zOff)
+					if spot then
+						spot:Destroy()
+					end
+					--[[spot = shot:Clone()
+					spot:ClearAllChildren()
+					spot.Anchored = true
+					spot.BrickColor = BrickColor.new("Really red")
+					spot.Transparency = 0.5
+					spot.Parent = workspace
+					spot.Position = shotGoal.p
+					spot.Size = Vector3.new(0.5,0.5,0.5)]]
+					
+					--local shotDirection = CFrame.new(shot.Position, randomLimb.Position)*CFrame.new(offset,0,0)*CFrame.Angles(math.rad(math.random(-1,1)*math.random()*baseDispersion), 0, 0)
+					local shotDirection = CFrame.new(shot.Position, shotGoal.p)
+					shot.Velocity = shotDirection.LookVector*shot.Speed.Value
+					Fired.Value = true
+					Reloaded.Value = false
+					doAnim("Fire")
+					dispersionModifier = dispersionModifier*0.7
+					wait(1)
+					actionOn = false
+					ReloadOrder:Fire()
+					wait(1)
+					Fired.Value = false
+					return end)
+
+				AttackOrder.Event:Connect(function(currentTarget)
+					if Dead.Value == true or InDuel.Value == true or Moving.Value == true then return end
+					actionOn = true
+					doAnim("MeleeReady")
+					local enemy
+					local enemies = currentTarget:FindFirstChild("Dummies")
+					if enemies ~= nil then
+						local candidates = unpack{enemies:GetChildren()}
+						repeat
+							local v = table.remove(candidates, math.random(#candidates))
+							local vRoot = v:FindFirstChild("HumanoidRootPart")
+							local vDead = v:FindFirstChild("Dead")
+							local vInDuel = v:FindFirstChild("InDuel")
+							local vCanFight = v:FindFirstChild("CanFight")
+							local vMoving = v:FindFirstChild("Moving")
+							if vRoot and vDead and vDead.Value == false and vCanFight and vCanFight.Value == true and vInDuel and vInDuel.Value == false and checkUnit(currentTarget, "Moving")==false and vMoving and vMoving.Value == false then
+								enemy = v
+								InDuel.Value = true
+								vInDuel.Value = true
+							end
+						until enemy ~= nil or #candidates == 0
+
+						local Distance
+						local enemyGoalDistance
+						local goalsDistance
+
+
+
+						if enemy and CanFight.Value == true then	
+							Distance = getFlatMagnitude(humanroot.Position, enemy:FindFirstChild("SoldierDuelPosition").Position)
+							enemyGoalDistance = getFlatMagnitude(enemy:FindFirstChild("MoveToPart").Position, enemy:FindFirstChild("GoToPart").Position)
+							goalsDistance = getFlatMagnitude(GoToPart.Position, enemy:FindFirstChild("GoToPart").Position)
+
+							local enemyGoal = enemy:FindFirstChild("MoveToPart")
+							local enemyGoToPart = enemy:FindFirstChild("GoToPart")
+							local enemyHuman = enemy:FindFirstChild("Humanoid")
+							local enemyAnim = enemy:FindFirstChild("CurrentAnim")
+							local enemyHumanRoot = enemy:FindFirstChild("HumanoidRootPart")
+							local enemyInDuel = enemy:FindFirstChild("InDuel")
+							local enemyCanFight = enemy:FindFirstChild("CanFight")
+							local enemyMoving = enemy:FindFirstChild("Moving")
+							local duelOn = true
+							--MoveToPart.CFrame = CFrame.new(MoveToPart.Position, enemyGoal.Position)
+							enemyGoal.CFrame = CFrame.new(enemyGoal.Position, MoveToPart.Position)
+							enemyGoal.CFrame = enemyGoal.CFrame*CFrame.new(0,0,getFlatMagnitude(MoveToPart.Position, enemyGoal.Position)/2*-1+math.random(-1,1)*4)
+							MoveToPart.CFrame = enemy:FindFirstChild("SoldierDuelPosition").CFrame
+							--MoveToPart.CFrame = MoveToPart.CFrame*CFrame.new(0,0,getFlatMagnitude(MoveToPart.Position, enemyGoal.Position)/2*-1)
+							--enemyGoal.CFrame = MoveToPart.CFrame*CFrame.new(0,0,-2)
+							--enemyGoal.CFrame = CFrame.new(enemyGoal.Position, MoveToPart.Position)
+							--MoveToPart.Position = Vector3.new(GoToPart.Position.X, myUnit:FindFirstChild("GoToPart").Position.Y, GoToPart.Position.Z)
+							--snapToTerrain(MoveToPart)
+							wait(0.1)
+							--Fighting = true
+							--local nowPos = GoToPart.CFrame
+							--wait(0.25*math.random(1,5))
+							--human:MoveTo(enemy:FindFirstChild("SoldierDuelPosition").Position)
+							--enemyHuman:MoveTo(Soldier:FindFirstChild("SoldierDuelPosition").Position)
+							--Moving.Value = true
+							--enemyMoving.Value = true
+							if enemyAnim then enemyAnim.Value = "MeleeReady" end
+							while Moving.Value == true and duelOn and getFlatMagnitude(humanroot.Position, enemyHumanRoot.Position) > 4 do
+								wait(0.1)
+								Distance = getFlatMagnitude(humanroot.Position, enemy:FindFirstChild("SoldierDuelPosition").Position)
+								enemyGoalDistance = getFlatMagnitude(enemyGoal.Position, enemy:FindFirstChild("GoToPart").Position)
+								goalsDistance = getFlatMagnitude(GoToPart.Position, enemy:FindFirstChild("GoToPart").Position)
+								--if not Fighting then duelOn = false end
+								--if Distance > 30 then duelOn = false end
+								--if enemyGoalDistance > 35 then duelOn = false end
+								--if goalsDistance > 35 then duelOn = false end
+								if CanFight.Value == false or not enemyCanFight or enemyCanFight.Value == false then duelOn = false end
+							end
+							Moving.Value = false
+							enemyMoving.Value = false
+							--human:Move(Vector3.new(0, 0, 0))
+							--enemyHuman:Move(Vector3.new(0, 0, 0))
+
+							--torso.CFrame = nowPos*CFrame.new(0,torso.Position.Y-GoToPart.Position.Y,0)
+
+							--while result ~= 1 and result ~= 2 and Moving.Value == false and enemy:FindFirstChild("Moving").Value == false and not routed and checkUnit(currentTarget, "Moving")==false and checkUnit(currentTarget, "Morale")==true do
+							if duelOn then
+								----print("nice")
+								--enemyHumanRoot.CFrame = Soldier:FindFirstChild("SoldierDuelPosition").CFrame*CFrame.new(0,enemyHuman.HipHeight,0)
+								--enemyHumanRoot.CFrame = CFrame.new(enemyHumanRoot.Position, humanroot.Position)
+								--humanroot.CFrame = enemy:FindFirstChild("SoldierDuelPosition").CFrame*CFrame.new(0,human.HipHeight,0)
+
+								local result
+								local theirMelee
+								if enemy ~= nil then
+									theirMelee = enemy:FindFirstChild("Melee").Value
+								end
+								repeat
+									local chance1 = math.random()
+									local chance2 = math.random()
+									if chance1 > chance2 then
+										if math.random() < (ourMelee/theirMelee)*1/16 then
+											result = 1
+										else
+											result = 2
+										end
+									else
+										if math.random() < (theirMelee/ourMelee)*1/16 then
+											result = 3
+										else
+											result = 4
+										end
+									end
+									if result == 1 then
+									end
+									if result <= 2 then
+										doAnim("MeleeAttack")
+										wait(0.4)
+										if enemy then
+											if result == 1 then
+												wait(0.1)
+												if enemyHuman then 
+													--Soldier:FindFirstChild("HumanoidRootPart"):FindFirstChild("Gun Stab"):Play()
+													local nums = {1,1,2}
+													doDamage(enemyHuman,50)
+													DuelResult:Fire(myUnit,currentTarget,50)
+													--InDuel.Value = false
+													local enemyInDuel = enemy:FindFirstChild("InDuel")
+													--if enemyInDuel then enemyInDuel.Value = false end
+												end
+											else
+												if enemyAnim and enemyHumanRoot then 
+													enemyAnim.Value = "Block" 
+													if math.random()<1/4 then
+														--[[local sounds = weaponSounds:GetChildren()
+														sounds[math.random(#sounds)]:Play()]]
+														--WeaponSounds[math.random(#WeaponSounds)]:Play()
+													end
+													--enemyHumanRoot:FindFirstChild("Gun Block"):Play()
+												end
+												wait(0.1)
+											end
+											wait(1)
+										end
+									else
+										if enemyAnim then enemyAnim.Value = "MeleeAttack" end
+										wait(0.4)
+										if result == 3 then
+											wait(0.1)
+											--enemy:FindFirstChild("HumanoidRootPart"):FindFirstChild("Gun Stab"):Play()
+											local nums = {1,1,2}
+											human:TakeDamage(50) 
+											DuelResult:Fire(currentTarget,myUnit,50)
+											--InDuel.Value = false
+											--local enemyInDuel = enemy:FindFirstChild("InDuel")
+											--if enemyInDuel then enemyInDuel.Value = false end
+										else
+											doAnim("Block")
+											if math.random()<1/4 then
+												--[[local sounds = weaponSounds:GetChildren()
+												sounds[math.random(#sounds)]:Play()]]
+												--WeaponSounds[math.random(#WeaponSounds)]:Play()
+											end
+											--humanroot:FindFirstChild("Gun Block"):Play()
+											wait(0.1)
+										end
+										wait(1)
+									end
+									enemyGoalDistance = (enemyGoal.Position - enemy:FindFirstChild("GoToPart").Position).Magnitude
+									wait(math.random(1,3)*0.25)
+								until CanFight.Value == false or checkUnit(currentTarget, "Moving") == true or not enemyHuman or enemyHuman.Health<=0 or not human or human.Health<=0 or enemyGoalDistance > 35 or routed or enemyCanFight == nil or enemyCanFight.Value == false
+							end
+							----print("done with duel")
+							InDuel.Value = false
+							if enemyInDuel then enemyInDuel.Value = false end
+							--wait(2)
+							--wait(math.random(3,5))
+							--[[if CanFight.Value == true then
+								MoveToPart.CFrame = MoveToPart.CFrame*CFrame.new(math.random(-1,1)*3,0,6)
+							end]]
+							--end
+						end
+					end
+					return end)
+				--[[AttackOrder.Event:Connect(function(currentTarget, target)
+					local enemy
+					if CanFight.Value == false then return end
+					if target == nil then
+						if InDuel.Value == true or checkUnit(myUnit, "Moving") == true then return end
+						CurretAnim.Value = "MeleeReady"
+						local enemies = currentTarget:FindFirstChild("Dummies")
+						if enemies ~= nil then
+							local candidates = unpack{enemies:GetChildren()}
+							repeat
+								local v = table.remove(candidates, math.random(#candidates))
+								local vRoot = v:FindFirstChild("HumanoidRootPart")
+								local vDead = v:FindFirstChild("Dead")
+								local vInDuel = v:FindFirstChild("InDuel")
+								local vCanFight = v:FindFirstChild("CanFight")
+								if vRoot and vDead and vDead.Value == false and vCanFight and vCanFight.Value == true and vInDuel and vInDuel.Value == false and checkUnit(currentTarget, "Moving")==false then
+									enemy = v
+									enemy:FindFirstChild("Orders").Attack:Fire(myUnit, Soldier)
+									InDuel.Value = true
+								end
+							until enemy ~= nil or #candidates == 0
+						end
+					elseif target ~= nil then
+						if InDuel.Value == true then return end
+						InDuel.Value = true
+						enemy = target
+					end
+					if enemy ~= nil then
+						--Fighting = true
+						local enemyGoal = enemy:FindFirstChild("MoveToPart")
+						local enemyGoToPart = enemy:FindFirstChild("GoToPart")
+						local enemyHuman = enemy:FindFirstChild("Humanoid")
+						local enemyAnim = enemy:FindFirstChild("CurrentAnim")
+						local enemyHumanRoot = enemy:FindFirstChild("HumanoidRootPart")
+						local enemyInDuel = enemy:FindFirstChild("InDuel")
+						local enemyCanFight = enemy:FindFirstChild("CanFight")
+						
+						local enemyGoalDistance = getFlatMagnitude(enemyHumanRoot.Position, enemyGoToPart.Position)
+						repeat
+							human:MoveTo(enemy:FindFirstChild("SoldierDuelPosition").Position)
+							PlayWalk:Play()
+							while enemyHumanRoot and CanFight.Value == true and enemyCanFight and enemyCanFight.Value == true and enemyGoalDistance and enemyHuman.Health>0 and enemyGoalDistance < 50 and getFlatMagnitude(humanroot.Position, enemyHumanRoot.Position) > 4 do
+								wait(0.1)
+								if enemyHumanRoot and enemyGoToPart then
+									local enemyGoalDistance = getFlatMagnitude(enemyHumanRoot.Position, enemyGoToPart.Position)
+								end
+							end
+							PlayWalk:Stop()
+							human:Move(Vector3.new(0, 0, 0))
+							if enemyHumanRoot and CanFight.Value == true and enemyCanFight and enemyCanFight.Value == true and enemyGoalDistance and enemyHuman.Health>0 and enemyGoalDistance < 50 and getFlatMagnitude(humanroot.Position, enemyHumanRoot.Position) <= 4 then
+								--humanroot.CFrame = enemy:FindFirstChild("SoldierDuelPosition").CFrame*CFrame.new(0,humanroot.Position.Y-enemy:FindFirstChild("SoldierDuelPosition").Position.Y,0)
+								humanroot.CFrame = CFrame.new(humanroot.Position, enemyHumanRoot.Position)
+								myAnim.Value = "MeleeAttack"
+								local chance = math.random()
+								wait(0.4)
+								if chance<(ourMelee/100)*1/4 then
+									enemyHuman:TakeDamage(50)
+									humanroot:FindFirstChild("Gun Stab"):Play()
+								else
+									if math.random()<1/4 then
+										local sounds = weaponSounds:GetChildren()
+										sounds[math.random(#sounds)]:Play()
+									end
+								end
+								wait(0.5*math.random(1,4))
+								CurretAnim.Value = "MeleeReady"
+							end
+							wait(1)
+							if enemyHumanRoot and enemyGoToPart then
+								enemyGoalDistance = getFlatMagnitude(enemyHumanRoot.Position, enemyGoToPart.Position)
+							end
+						until enemyHuman == nil or enemyHuman.Health<=0 or CanFight.Value == false or checkUnit(currentTarget, "Moving") == true or enemyGoalDistance > 50 or routed or enemyCanFight == nil or enemyCanFight.Value == false
+						InDuel.Value = false
+					end
+				end)]]
+				human.Died:Connect(function()
+					Dead.Value = true
+					if IsCaptain.Value == true then
+						myUnitMarker.Anchored = true
+						CaptainCommand:Fire("New Captain")
+					end
+					if InDuel then
+						InDuel:Destroy()
+					end
+					--humanroot.CFrame = humanroot.CFrame*CFrame.new(0,-human.HipHeight,0)*CFrame.Angles(-math.rad(90),0,0)
+					for i, v in pairs(Soldier:GetDescendants()) do
+						if v:IsA("Weld") or v:IsA("WeldConstraint") then
+							v:Destroy()
+						end
+					end
+					myUnit.SoldiersAlive.Value = myUnit.SoldiersAlive.Value - 1
+					Soldier.Parent = workspace.GameObjects
+					--[[for i, object in pairs(Soldier:GetDescendants()) do
+						if object:IsA("Motor6D") then
+							local socket = Instance.new("BallSocketConstraint")
+							local part0 = object.Part1
+							local joint_name = object.Name
+							local attachment0 = object.Parent:FindFirstChild(joint_name.."Attachment") or object.Parent:FindFirstChild(joint_name.."RigAttachment")
+							local attachment1 = part0:FindFirstChildOfClass("Attachment")
+							if object.Parent and object.Parent.Name == "HumanoidRootPart" then
+								object:Destroy()
+							end
+							if attachment0 and attachment1 then
+								socket.Attachment0, socket.Attachment1 = attachment0, attachment1
+								socket.Parent = object.Parent
+								object:Destroy()
+							end
+						end
+					end]]--
+					wait(0.5)
+					wait(2.5)
+					Soldier:Destroy()
+					return end)
+			elseif soldierType == "Cavalry" then
+				
+				pathSource = Soldier:FindFirstChild("Body")
+				
+				local ChargeOrder = Orders.Charge
+				local GallopSound = humanroot["Gallop Sound"]
+				local chargePart = Soldier.ChargePart
+				GallopSound.Volume = 1*(human.WalkSpeed/30)
+				GallopSound.PlaybackSpeed = 0.7+(human.WalkSpeed/30)
+				local chargeStat = 20
+				local chargeConnection = nil
+				baseSpeed = 24
+				local ChargeCheck = BattleEvents:FindFirstChild("ChargeCheck")
+				local chargeTag
+				chargeStat = unitCard.Charge.Value
+				
+				pathParams = {["AgentRadius"] = 6, ["AgentHeight"] = 3, ["AgentCanJump"] = false, ["WaypointSpacing"] = 8}
+				path = PathfindingService:CreatePath(pathParams)
+				
+				MoveOrder.Event:Connect(function(disorder, waypoints, id)
+					if Dead.Value == true or getFlatMagnitude(humanroot.Position, GoToPart.Position) < 2 then return end
+					--GoToPart:GetPropertyChangedSignal("Position"):Connect(function()
+					pathId = id
+					if chargeTag then
+						chargeTag:Destroy()
+						chargeTag = nil
+					end
+					while InDuel.Value == true do
+						wait(0.5)
+						----print("wont let me move")
+					end
+					local xVary = math.random(-1,1)*math.random()*0.5
+					local zVary = math.random(-1,1)*math.random()*0.75
+					unitPath = waypoints
+					MoveToPart.CFrame = GoToPart.CFrame*CFrame.new(xVary,0,zVary)
+					----print(tostring(GoToPart.Position) .. ", ".. tostring(MoveToPart.Position) .. ", " .. Soldier.Name .. ", " .. myUnit.Name .. ", " .. myUnit.Parent.Nation.Value)
+					--if stopped then --print("Got here 2") end
+					--snapToTerrain(MoveToPart)
+					
+				end)
+				SetupOrder.Event:Connect(function(setupType, values)
+					if setupType == "General" then
+						ourMelee = values[1]
+						ourMeleeInst.Value = values[1]
+					elseif setupType == "Cavalry" then
+						chargeStat = values[1]
+						baseSpeed = values[2]
+					end
+					return end)
+				CanFight:GetPropertyChangedSignal("Value"):Connect(function()
+					if CanFight.Value == false then
+						human.WalkSpeed = baseSpeed
+					end
+					return end)
+				Moving:GetPropertyChangedSignal("Value"):Connect(function()
+					if Moving.Value == true then
+						--GallopSound:Play()
+					else
+						wait(3)
+						if chargeConnection then
+							chargeConnection:Disconnect()
+							human.WalkSpeed = baseSpeed
+							doAnim("ChargeEnd")
+							--CurrentAnim.Value = "ChargeEnd"
+						end
+						--GallopSound:Stop()
+						
+					end
+				end)
+				
+				InDuel:GetPropertyChangedSignal("Value"):Connect(function()
+					if Dead.Value == true then return end
+					if InDuel.Value == true then
+						human.WalkSpeed = 12
+					end
+				end)
+				ChargeOrder.Event:Connect(function(Action, value, enemies)
+					----print("got charge order")
+					----print(Action)
+					if Action == "Start" then
+						----print(value)
+						--human.WalkSpeed = baseSpeed + 6
+						doAnim("Charge")
+						
+						--CurrentAnim.Value = "Charge"
+						
+						wait(1)
+						print("nice")
+						if chargeConnection then
+							chargeConnection:Disconnect()
+							chargeConnection = nil
+						end
+						print("yessuh " .. tostring(pathId))
+						chargeConnection = chargePart.Touched:Connect(function(hit)			
+							if hit.Name == "HumanoidRootPart" then
+								----print("Hit hitbox")
+								if chargeTag then
+									chargeTag:Destroy()
+									chargeTag = nil
+								end
+								local enemy = hit.Parent
+								local enemyTeam = enemy.Parent.Parent.Parent
+								if not enemy or enemyTeam == myUnit.Parent then return end
+								print(1)
+								local enemyDead = enemy:FindFirstChild("Dead")
+								--local enemyTorso = enemy:FindFirstChild("Torso")
+								local enemyHuman = enemy:FindFirstChild("Humanoid")
+								local enemyHumanRoot = enemy:FindFirstChild("HumanoidRootPart")
+								local enemyGoal = enemy:FindFirstChild("MoveToPart")
+								local enemyBodyPos = enemy:FindFirstChild("BodyPosition")
+								if enemyDead == nil or enemyHuman == nil then return end
+								print(2)
+								print("yus")
+								GoToPart.Position = Vector3.new(enemyHumanRoot.Position.X, MoveToPart.Position.Y,enemyHumanRoot.Position.Z)
+								MoveOrder:Fire(0,unitPath)
+								if enemyDead.Value == true then return end
+								print(3)
+								chargeConnection:Disconnect()
+								local values = ChargeCheck:Invoke(Soldier, myUnit, enemy.Parent.Parent)
+								print(4)
+								if values[1] == "Infantry" then
+									local enemyCharged = enemy:FindFirstChild("Charged")
+									if enemyCharged == nil or enemyCharged.Value == true then return end
+									local modifier = chargeStat
+									if values[2]<0 then
+										if math.random() <= values[2]/(-10) then
+											----print("oof")
+											human:TakeDamage(100)
+											return
+										end
+										
+									end
+									modifier += values[2]*3.5
+									modifier = modifier/100
+									enemyGoal.CFrame = CFrame.new(enemyHumanRoot.Position, humanroot.Position)
+									enemyHumanRoot.CFrame = CFrame.new(enemyHumanRoot.Position, humanroot.Position)
+									local goalPos = humanroot.CFrame
+									goalPos = goalPos*CFrame.new(0,0,-25-30*modifier-5*(math.random(0,2)))
+									enemyBodyPos.Position = goalPos.p
+									wait(0.2)
+									enemyCharged.Value = true
+								--	enemyHuman.Sit = true
+									wait(1)
+									--enemyHumanRoot.Velocity = Vector3.new(humanroot.CFrame.LookVector.X, 0, humanroot.CFrame.LookVector.Z) * 120
+									if math.random() < modifier then
+										--if value == true then
+											print("nuuuuu")
+										doDamage(enemyHuman,100)
+										--end
+									end
+								elseif values[1] == "Cavalry" then
+									if math.random()<(1/8)*(chargeStat/values[2]) then
+										doDamage(enemyHuman,100)
+									end
+								end
+								----print("Charged: " .. enemyTeam.Nation.Value)
+								
+								--[[]]--
+							elseif hit.Name == "ChargePart" then
+								----print("Hit other horse")
+								local enemy = hit.Parent
+								local enemyTeam = enemy.Parent.Parent.Parent
+								if not enemy or enemyTeam == myUnit.Parent then return end
+								local enemyDead = enemy:FindFirstChild("Dead")
+								--local enemyTorso = enemy:FindFirstChild("Torso")
+								local enemyHuman = enemy:FindFirstChild("Humanoid")
+								if enemyDead == nil or enemyHuman == nil then return end
+								if enemyDead.Value == true then return end
+								print("woohoo")
+								chargeConnection:Disconnect()
+								local values = ChargeCheck:Invoke(Soldier, myUnit, enemy.Parent.Parent)
+								print("yessir")
+								if math.random()<(1/8)*(chargeStat/values[2]) then
+									doDamage(enemyHuman,100)
+								end
+								----print("Charged: " .. enemyTeam.Nation.Value)
+							end
+						end)
+					elseif Action == "End" then
+						for i, enemy in pairs(enemies:GetChildren()) do
+							chargeTag = enemy:FindFirstChild("ChargeTag")
+							if not chargeTag then
+								chargeTag = Instance.new("StringValue")
+								chargeTag.Name = "ChargeTag"
+								chargeTag.Parent = enemy
+									human:MoveTo(enemy:FindFirstChild("HumanoidRootPart").Position)
+								break
+							end
+						end
+					elseif Action == "Break" then
+						if chargeConnection then
+							chargeConnection:Disconnect()
+							chargeConnection = nil
+						end
+						human.WalkSpeed = baseSpeed
+						doAnim("ChargeEnd")
+						--CurrentAnim.Value = "ChargeEnd"
+					return end
+				end)
+				AttackOrder.Event:Connect(function(currentTarget)
+					if Dead.Value == true or InDuel.Value == true or Moving.Value == true then return end
+					actionOn = true
+					doAnim("MeleeReady")
+					--CurrentAnim.Value = "MeleeReady"
+					local enemy
+					local enemies = currentTarget:FindFirstChild("Dummies")
+					if enemies ~= nil then
+						local candidates = unpack{enemies:GetChildren()}
+						repeat
+							local v = table.remove(candidates, math.random(#candidates))
+							local vRoot = v:FindFirstChild("HumanoidRootPart")
+							local vDead = v:FindFirstChild("Dead")
+							local vInDuel = v:FindFirstChild("InDuel")
+							local vCanFight = v:FindFirstChild("CanFight")
+							local vMoving = v:FindFirstChild("Moving")
+							if vRoot and vDead and vDead.Value == false and vCanFight and vCanFight.Value == true and vInDuel and vInDuel.Value == false and checkUnit(currentTarget, "Moving")==false and vMoving and vMoving.Value == false then
+								enemy = v
+								InDuel.Value = true
+								vInDuel.Value = true
+							end
+						until enemy ~= nil or #candidates == 0
+
+						local Distance
+						local enemyGoalDistance
+						local goalsDistance
+
+
+
+						if enemy and CanFight.Value == true then	
+							Distance = getFlatMagnitude(humanroot.Position, enemy:FindFirstChild("SoldierDuelPosition").Position)
+							enemyGoalDistance = getFlatMagnitude(enemy:FindFirstChild("MoveToPart").Position, enemy:FindFirstChild("GoToPart").Position)
+							goalsDistance = getFlatMagnitude(GoToPart.Position, enemy:FindFirstChild("GoToPart").Position)
+
+							local enemyGoal = enemy:FindFirstChild("MoveToPart")
+							local enemyGoToPart = enemy:FindFirstChild("GoToPart")
+							local enemyHuman = enemy:FindFirstChild("Humanoid")
+							local enemyAnim = enemy:FindFirstChild("CurrentAnim")
+							local enemyHumanRoot = enemy:FindFirstChild("HumanoidRootPart")
+							local enemyInDuel = enemy:FindFirstChild("InDuel")
+							local enemyCanFight = enemy:FindFirstChild("CanFight")
+							local enemyMoving = enemy:FindFirstChild("Moving")
+							local duelOn = true
+							enemyGoal.CFrame = CFrame.new(enemyGoal.Position, MoveToPart.Position)
+							enemyGoal.CFrame = enemyGoal.CFrame*CFrame.new(0,0,getFlatMagnitude(MoveToPart.Position, enemyGoal.Position)/2*-1+math.random(-1,1)*4)
+							MoveToPart.CFrame = enemy:FindFirstChild("RiderDuelPosition").CFrame
+							--MoveToPart.CFrame = CFrame.new(MoveToPart.Position, enemyGoal.Position)
+							--MoveToPart.CFrame = MoveToPart.CFrame*CFrame.new(0,0,getFlatMagnitude(MoveToPart.Position, enemyGoal.Position)/2*-1)
+							--enemyGoal.CFrame = MoveToPart.CFrame*CFrame.new(0,0,-2)
+							--enemyGoal.CFrame = CFrame.new(enemyGoal.Position, MoveToPart.Position)
+							--MoveToPart.Position = Vector3.new(GoToPart.Position.X, myUnit:FindFirstChild("GoToPart").Position.Y, GoToPart.Position.Z)
+							--snapToTerrain(MoveToPart)
+							wait(0.1)
+							--Fighting = true
+							--local nowPos = GoToPart.CFrame
+							--wait(0.25*math.random(1,5))
+							--human:MoveTo(enemy:FindFirstChild("SoldierDuelPosition").Position)
+							--enemyHuman:MoveTo(Soldier:FindFirstChild("SoldierDuelPosition").Position)
+							--Moving.Value = true
+							--enemyMoving.Value = true
+							if enemyAnim then enemyAnim.Value = "MeleeReady" end
+							while Moving.Value == true and duelOn and getFlatMagnitude(humanroot.Position, enemyHumanRoot.Position) > 4 do
+								wait(0.1)
+								Distance = getFlatMagnitude(humanroot.Position, enemy:FindFirstChild("RiderDuelPosition").Position)
+								enemyGoalDistance = getFlatMagnitude(enemyGoal.Position, enemy:FindFirstChild("GoToPart").Position)
+								goalsDistance = getFlatMagnitude(GoToPart.Position, enemy:FindFirstChild("GoToPart").Position)
+								--if not Fighting then duelOn = false end
+								--if Distance > 30 then duelOn = false end
+								--if enemyGoalDistance > 35 then duelOn = false end
+								--if goalsDistance > 35 then duelOn = false end
+								if CanFight.Value == false or not enemyCanFight or enemyCanFight.Value == false then duelOn = false end
+							end
+							Moving.Value = false
+							enemyMoving.Value = false
+							--human:Move(Vector3.new(0, 0, 0))
+							--enemyHuman:Move(Vector3.new(0, 0, 0))
+
+							--torso.CFrame = nowPos*CFrame.new(0,torso.Position.Y-GoToPart.Position.Y,0)
+
+							--while result ~= 1 and result ~= 2 and Moving.Value == false and enemy:FindFirstChild("Moving").Value == false and not routed and checkUnit(currentTarget, "Moving")==false and checkUnit(currentTarget, "Morale")==true do
+							if duelOn then
+								----print("nice")
+								--enemyHumanRoot.CFrame = Soldier:FindFirstChild("RiderDuelPosition").CFrame*CFrame.new(0,enemyHuman.HipHeight,0)
+								--enemyHumanRoot.CFrame = CFrame.new(enemyHumanRoot.Position, humanroot.Position)
+								--humanroot.CFrame = enemy:FindFirstChild("RiderDuelPosition").CFrame*CFrame.new(0,human.HipHeight,0)
+								--humanroot.CFrame = CFrame.new(humanroot.Position, enemyHumanRoot.Position)
+
+								local result
+								local theirMelee
+								if enemy ~= nil then
+									theirMelee = enemy:FindFirstChild("Melee").Value
+								end
+								repeat
+									local chance1 = math.random()
+									local chance2 = math.random()
+									if chance1 > chance2 then
+										if math.random() < (ourMelee/theirMelee)*1/16 then
+											result = 1
+										else
+											result = 2
+										end
+									else
+										if math.random() < (theirMelee/ourMelee)*1/16 then
+											result = 3
+										else
+											result = 4
+										end
+									end
+									if result <= 2 then
+										myAnim.Value = "MeleeAttack"
+										wait(0.4)
+										if enemy then
+											if result == 1 then
+												wait(0.1)
+												if enemyHuman then 
+													--Soldier:FindFirstChild("HumanoidRootPart"):FindFirstChild("Gun Stab"):Play()
+													local nums = {1,1,2}
+													doDamage(enemyHuman,50)
+													DuelResult:Fire(myUnit,currentTarget,50)
+													--InDuel.Value = false
+													--local enemyInDuel = enemy:FindFirstChild("InDuel")
+													--if enemyInDuel then enemyInDuel.Value = false end
+												end
+											else
+												if enemyAnim and enemyHumanRoot then 
+													enemyAnim.Value = "Block" 
+													if math.random()<1/4 then
+														--[[local sounds = weaponSounds:GetChildren()
+														sounds[math.random(#sounds)]:Play()]]
+														--WeaponSounds[math.random(#WeaponSounds)]:Play()
+													end
+													--enemyHumanRoot:FindFirstChild("Gun Block"):Play()
+												end
+												wait(0.1)
+											end
+											wait(1)
+										end
+									else
+										if enemyAnim then enemyAnim.Value = "MeleeAttack" end
+										wait(0.4)
+										if result == 3 then
+											wait(0.1)
+											--enemy:FindFirstChild("HumanoidRootPart"):FindFirstChild("Gun Stab"):Play()
+											local nums = {1,1,2}
+											human:TakeDamage(50) 
+											DuelResult:Fire(currentTarget,myUnit,50)
+											--InDuel.Value = false
+											--local enemyInDuel = enemy:FindFirstChild("InDuel")
+											--if enemyInDuel then enemyInDuel.Value = false end
+										else
+											myAnim.Value = "Block"
+											if math.random()<1/4 then
+												--[[local sounds = weaponSounds:GetChildren()
+												sounds[math.random(#sounds)]:Play()]]
+												--WeaponSounds[math.random(#WeaponSounds)]:Play()
+											end
+											--humanroot:FindFirstChild("Gun Block"):Play()
+											wait(0.1)
+										end
+										wait(1)
+									end
+									enemyGoalDistance = (enemyGoal.Position - enemy:FindFirstChild("GoToPart").Position).Magnitude
+									wait(math.random(1,3)*0.25)
+								until CanFight.Value == false or checkUnit(currentTarget, "Moving") == true or not enemyHuman or enemyHuman.Health<=0 or not human or human.Health<=0 or enemyGoalDistance > 35 or routed or enemyCanFight == nil or enemyCanFight.Value == false
+							end
+							----print("done with duel")
+							InDuel.Value = false
+							if enemyInDuel then enemyInDuel.Value = false end
+							--wait(2)
+							--wait(math.random(3,5))
+							--[[if CanFight.Value == true then
+								MoveToPart.CFrame = MoveToPart.CFrame*CFrame.new(math.random(-1,1)*3,0,6)
+							end]]
+							--end
+						end
+					end
+					return end)
+				human.Died:Connect(function()
+					Dead.Value = true
+					if IsCaptain.Value == true then
+						myUnitMarker.Anchored = true
+						CaptainCommand:Fire("New Captain")
+					end
+					if InDuel then
+						InDuel:Destroy()
+					end
+					--humanroot.CFrame = humanroot.CFrame*CFrame.new(0,-human.HipHeight,0)*CFrame.Angles(-math.rad(90),0,0)
+					for i, v in pairs(Soldier:GetDescendants()) do
+						if v:IsA("Weld") or v:IsA("WeldConstraint") then
+							v:Destroy()
+						end
+					end
+					myUnit.SoldiersAlive.Value = myUnit.SoldiersAlive.Value - 1
+					Soldier.Parent = workspace.GameObjects
+					--[[for i, object in pairs(Soldier:GetDescendants()) do
+						if object:IsA("Motor6D") then
+							local socket = Instance.new("BallSocketConstraint")
+							local part0 = object.Part1
+							local joint_name = object.Name
+							local attachment0 = object.Parent:FindFirstChild(joint_name.."Attachment") or object.Parent:FindFirstChild(joint_name.."RigAttachment")
+							local attachment1 = part0:FindFirstChildOfClass("Attachment")
+							if object.Parent and object.Parent.Name == "HumanoidRootPart" then
+								object:Destroy()
+							end
+							if attachment0 and attachment1 then
+								socket.Attachment0, socket.Attachment1 = attachment0, attachment1
+								socket.Parent = object.Parent
+								object:Destroy()
+							end
+						end
+					end]]--
+					wait(0.5)
+					wait(2.5)
+					Soldier:Destroy()
+					return end)
+			end
+			--print("setup complete")
+		end
+	end
+end)
