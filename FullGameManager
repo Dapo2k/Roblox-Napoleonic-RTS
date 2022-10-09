@@ -1,0 +1,3392 @@
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local Players = game:GetService("Players") -- whole
+local CollectionService = game:GetService("CollectionService")
+local PhysicsService = game:GetService("PhysicsService")
+local RunService = game:GetService("RunService")
+local PathfindingService = game:GetService("PathfindingService")
+local BattleEvents = ReplicatedStorage:WaitForChild("GameOrg"):WaitForChild("BattleEvents")
+local ClientComm = ReplicatedStorage:WaitForChild("GameOrg"):WaitForChild("ClientComm")
+local GameManagementEvents = ReplicatedStorage:WaitForChild("GameOrg"):WaitForChild("GameManagementEvents")
+local ClientGameAlerts = ClientComm:WaitForChild("ClientGameAlerts")
+local GameUnits = {}
+local Walls = {}
+local Garrisons = {}
+--Replicated Storage Events
+local StartGame = GameManagementEvents:FindFirstChild("StartGame")
+local EndGame = GameManagementEvents:FindFirstChild("EndGame")
+local UnitMover = ClientComm:WaitForChild("UnitMover") -- whole
+local UnitTargeter = ClientComm:WaitForChild("UnitTargeter") -- whole
+local RowUpdate = ClientComm:WaitForChild("RowUpdate") -- whole
+local AttackModeUpdate = ClientComm:WaitForChild("AttackModeUpdate") --whole
+local MeleeEvent = BattleEvents:WaitForChild("MeleeEvent") --whole 
+local SelectCheck = ClientComm:WaitForChild("SelectCheck") --whole 
+local clickSender = ClientComm:WaitForChild("ClickSender") --whole
+local moraleSetup = BattleEvents:WaitForChild("MoraleSetup") --whole
+local rangeSetup = BattleEvents:WaitForChild("RangeSetup") --whole
+local VisibilityCheck = ClientComm:WaitForChild("VisibilityCheck") --whole 
+local StatusCheck = ClientComm:WaitForChild("StatusCheck") --whole 
+local SoldierCheck = BattleEvents:WaitForChild("SoldierCheck") --whole 
+local DuelResult = BattleEvents:WaitForChild("DuelResult") --whole 
+local ChargeCheck = BattleEvents:WaitForChild("ChargeCheck") --whole 
+local CountKill = BattleEvents:WaitForChild("CountKill") --whole 
+local StartRealGame = GameManagementEvents:FindFirstChild("StartRealGame")
+
+
+local pathParams = {["AgentRadius"] = 4, ["AgentHeight"] = 3, ["AgentCanJump"] = true}
+
+local GameTime = game.Workspace.GameObjects.TimeLeft
+
+--local StartGameRemote = ReplicatedStorage:WaitForChild("StartGameRemote") --whole 
+local EndSetup = GameManagementEvents:WaitForChild("EndSetup") --whole 
+local EndSetupEvents = GameManagementEvents:WaitForChild("EndSetupEvents") --whole 
+local Team1
+local Team2
+for i, v in pairs(CollectionService:GetTagged("Army")) do
+	if v.Name == "Team1" then
+		Team1 = v
+	else
+		Team2 = v
+	end
+end
+--GameScoring related variables
+--local StartGame = game.ReplicatedStorage.StartGame
+--local EndGame = game.ReplicatedStorage.EndGame
+local gameLength = 600
+local currentGameMode
+local timeLeft = gameLength
+local gameInProgress = false
+local selectionStage = false
+--Raycast variables
+local raycastParams = RaycastParams.new() -- whole
+raycastParams.FilterType = Enum.RaycastFilterType.Whitelist
+raycastParams.FilterDescendantsInstances = {workspace.Terrain}
+raycastParams.IgnoreWater = true
+
+local wallChecker = RaycastParams.new() -- whole
+wallChecker.FilterType = Enum.RaycastFilterType.Blacklist
+wallChecker.FilterDescendantsInstances = {CollectionService:GetTagged("WallPosition")}
+wallChecker.IgnoreWater = true
+
+local onlyHit = Instance.new("Folder")
+onlyHit.Parent = workspace
+
+for i, object in pairs (CollectionService:GetTagged("VisibilityModifier")) do
+	if object:IsA("BasePart") and object:FindFirstAncestor("Workspace") then
+		object.Parent = onlyHit
+		object.Transparency = 1
+	end
+end
+
+for i, object in pairs(game.Workspace:GetDescendants()) do
+	if object.Name == "Branch" then
+		object.CanTouch = false
+	end
+	if object.Name == "Leaves" then
+		object.CanTouch = false
+		object.CanCollide = false
+	end
+end
+local visibilityChecker = RaycastParams.new() -- whole
+visibilityChecker.FilterType = Enum.RaycastFilterType.Whitelist
+visibilityChecker.FilterDescendantsInstances = {onlyHit}
+visibilityChecker.IgnoreWater = true
+--Collision group related
+local npcCollisionGroupName = "Soldiers"
+local bordersCollisionGroupName = "Borders"
+local playersCollisionGroupName = "Players"
+local rootCollisionGroupName = "RootParts"
+local wallCollisionGroupName = "Walls"
+PhysicsService:CreateCollisionGroup(npcCollisionGroupName)
+PhysicsService:CreateCollisionGroup(bordersCollisionGroupName)
+PhysicsService:CreateCollisionGroup(playersCollisionGroupName)
+PhysicsService:CreateCollisionGroup(rootCollisionGroupName)
+PhysicsService:CreateCollisionGroup(wallCollisionGroupName)
+PhysicsService:CollisionGroupSetCollidable(npcCollisionGroupName, npcCollisionGroupName, false) 
+PhysicsService:CollisionGroupSetCollidable(rootCollisionGroupName, rootCollisionGroupName, false) 
+PhysicsService:CollisionGroupSetCollidable(npcCollisionGroupName, bordersCollisionGroupName, false) 
+PhysicsService:CollisionGroupSetCollidable(npcCollisionGroupName, playersCollisionGroupName, false) 
+PhysicsService:CollisionGroupSetCollidable(npcCollisionGroupName, rootCollisionGroupName, false) 
+PhysicsService:CollisionGroupSetCollidable(rootCollisionGroupName, playersCollisionGroupName, false) 
+PhysicsService:CollisionGroupSetCollidable(playersCollisionGroupName, wallCollisionGroupName, false) 
+PhysicsService:CollisionGroupSetCollidable(rootCollisionGroupName, wallCollisionGroupName, true) 
+PhysicsService:CollisionGroupSetCollidable(npcCollisionGroupName, wallCollisionGroupName, false) 
+PhysicsService:CollisionGroupSetCollidable(bordersCollisionGroupName, playersCollisionGroupName, true) 
+StartRealGame.Event:Connect(function()
+	selectionStage = true
+end)
+EndSetup.Event:Connect(function()
+	selectionStage = false
+end)
+--in Game stuff
+local routAreas = game.Workspace.GameObjects.RoutPieces
+local Borders = game.Workspace.GameObjects.Borders
+--Functions for Game Scoring
+local function setPlayerGuiText(text)
+	for i, player in pairs(Players:GetChildren()) do
+		player.PlayerGui.GameInfoGui.Frame.Time.Text = text
+	end
+end
+local function Format(Int)
+	return string.format("%02i", Int)
+end
+local function Round(value)
+	value *= 100
+	value = math.floor(value)
+	value = value / 100
+	return value
+end
+local function convertToHMS(Seconds)
+	local Minutes = (Seconds - Seconds%60)/60
+	Seconds = Seconds - Minutes*60
+	local Hours = (Minutes - Minutes%60)/60
+	Minutes = Minutes - Hours*60
+	return Format(Minutes)..":"..Format(Seconds)
+end
+--Functions for Units and Unit related
+local function getFlatMagnitude(pos1, pos2)
+	local flatPos1 = Vector3.new(pos1.X, 0, pos1.Z)
+	local flatPos2 = Vector3.new(pos2.X, 0, pos2.Z)
+	return (flatPos1 - flatPos2).Magnitude
+end
+local function getUnit(unit)
+	for i, object in pairs(GameUnits) do
+		if object.unit == unit then
+			return object
+		end
+	end
+end
+local function getRow(index, RowLength)
+	local row = math.ceil(index/RowLength)
+	return row
+end
+local function snapToTerrain(GoToPart)
+	local rayStart = Vector3.new(GoToPart.Position.X, 200, GoToPart.Position.Z)
+	local raycastResult = workspace:Raycast(rayStart, Vector3.new(0, -200, 0), raycastParams)
+	if raycastResult then
+		GoToPart.Position = Vector3.new(GoToPart.Position.X, raycastResult.Position.Y+0.4, GoToPart.Position.Z)
+	end
+end
+local function isForward(base, target, value)
+	local forward = base.CFrame.lookVector
+	local targetPosition = target.Position
+	local displacement = target.Position - base.Position -- (direction)
+	local amountForward = forward:Dot(displacement)
+	if value == 1 then
+		if amountForward >=0 then
+			return true
+		else
+			return false
+		end
+	elseif value == 2 then
+		return amountForward
+	end
+end
+local function meanVector(soldierGroup, xOffset, zOffset)
+	local totalVector = Vector3.new(0,0,0)
+	local totalSoldiers = 0
+	for i, soldier in pairs(soldierGroup:GetChildren()) do
+		if soldier ~= nil then
+			local soldierDead = soldier:FindFirstChild("Dead")
+			local soldierRoot = soldier:FindFirstChild("HumanoidRootPart")
+			if soldierDead and soldierDead.Value == false then
+				totalVector = totalVector + (soldierRoot.CFrame*CFrame.new(xOffset,0,zOffset)).p
+				totalSoldiers = totalSoldiers + 1
+			end
+		end
+	end
+	local averageVector = totalVector/totalSoldiers
+	return averageVector
+end
+local function meanGoalVector(soldierGroup, xOffset, zOffset)
+	local totalVector = Vector3.new(0,0,0)
+	local totalSoldiers = 0
+	for i, soldier in pairs(soldierGroup:GetChildren()) do
+		if soldier ~= nil then
+			local soldierDead = soldier:FindFirstChild("Dead")
+			local soldierRoot = soldier:FindFirstChild("HumanoidRootPart")
+			local soldierGoal = soldier:FindFirstChild("GoToPart")
+			if soldierDead and soldierDead.Value == false then
+				totalVector = totalVector + (soldierGoal.CFrame*CFrame.new(xOffset,0,zOffset)).p
+				totalSoldiers = totalSoldiers + 1
+			end
+		end
+	end
+	local averageVector = totalVector/totalSoldiers
+	return averageVector
+end
+
+local Wall
+Wall = {}
+Wall.__index = Wall
+function Wall.new(wall)
+	local newWall = {}
+
+	newWall.wall = wall
+	newWall.wallPositions = {}
+	newWall.wallSpots = {}
+	setmetatable(newWall, Wall)
+	return newWall
+end
+
+local function findWall(wallSpot)
+	for i, Wall in pairs(Walls) do
+		if Wall.wallSpot == wallSpot then
+			return Wall
+		end
+	end
+end
+
+local Garrison
+Garrison = {}
+Garrison.__index = Garrison
+function Garrison.new(garrison)
+	local newGarrison = {}
+
+	newGarrison.building = garrison
+	newGarrison.unit = nil
+	newGarrison.garrisonArea = garrison:WaitForChild("GarrisonArea")
+	newGarrison.waitArea = garrison:FindFirstChild("WaitArea")
+	newGarrison.doorArea = garrison:FindFirstChild("DoorArea")
+	newGarrison.soldierSpots = {}
+	
+	setmetatable(newGarrison, Garrison)
+	return newGarrison
+end
+
+local function findGarrison(building)
+	--print("yes")
+	for i, garrison in pairs(Garrisons) do
+		print(garrison.building)
+		if garrison.building == building then
+			--print("woohoo")
+			return garrison
+		end
+	end
+end
+
+local Regiment
+local Infantry
+local Cavalry
+--Regiment Classes and related functions and setup
+function CreateClasses()
+	--Regiment Class
+	Regiment = {}
+	Regiment.__index = Regiment
+	function Regiment.new(regiment)
+		local newRegiment = {}
+		local unitCard = ReplicatedStorage.UnitCards:FindFirstChild(regiment.UnitType.Value)
+		newRegiment.unit = regiment -- the referred regiment in the game
+		--regiment instance data
+		newRegiment.goal = regiment.GoToPart
+		newRegiment.marker = regiment.UnitMarker
+		newRegiment.label = regiment:FindFirstChild("Frame")
+		newRegiment.profile = regiment:FindFirstChild("UnitProfile")
+		newRegiment.army = regiment.Parent
+		newRegiment.owner = regiment.Owner
+		newRegiment.CaptainCommand = regiment.CaptainCommand
+		newRegiment.MoraleHit = regiment.MoraleHit
+		newRegiment.meleeRange = regiment.MeleeRange
+		newRegiment.soldiersAlive = regiment.SoldiersAlive
+		newRegiment.inGameGui = regiment.UnitMarker.GuiHolder:FindFirstChildOfClass("BillboardGui")
+		newRegiment.moraleAlertsGui = regiment.UnitMarker.GuiHolder:FindFirstChildOfClass("BillboardGui"):FindFirstChild("MoraleAlerts")
+		newRegiment.moraleAlert = regiment.Hit
+		newRegiment.Spacing = regiment.Spacing
+		--player related data
+		newRegiment.playerOwner = Players:FindFirstChild(regiment.Owner.Value)
+		--regiment related variables and data
+		newRegiment.visible = false
+		newRegiment.formations = {"Line"}
+		newRegiment.formation = "Line"
+		newRegiment.inFormation = true
+		newRegiment.disorder = 0.5
+		newRegiment.maxTroops = #regiment.Dummies:GetChildren()
+		newRegiment.index = regiment.Index.Value
+		newRegiment.currentTarget = nil
+		newRegiment.designatedTarget = nil
+		newRegiment.targetConnection = nil
+		newRegiment.fighting = false
+		newRegiment.moving = false
+		newRegiment.rowLength = 12
+		newRegiment.active = true
+		newRegiment.currentSound = nil
+		newRegiment.currentDrums = nil
+		newRegiment.meleeStat = 0 --regiment.MeleeStat.Value
+		newRegiment.stealthStat = 0 --regiment.StealthStat.Value
+		newRegiment.UMID = 0
+		newRegiment.currentStealth = 0
+		newRegiment.stealthModifier = 0
+		newRegiment.sinceFired = {}
+		newRegiment.attackers = {}
+		newRegiment.commandOn = false
+		newRegiment.inSquare = false
+		newRegiment.sides = {}
+		--regiment connections
+		newRegiment.con1 = nil
+		--regiment soldiers data
+		newRegiment.soldiers = regiment.Dummies
+		newRegiment.captain = nil
+		newRegiment.frontRow = {}
+		newRegiment.rows = {}
+		--id
+		newRegiment.ID = tostring(regiment.Parent) .. ", " .. tostring(regiment)
+		--regiment morale data
+		newRegiment.morale = unitCard.Morale.Value
+		newRegiment.myMorale = regiment.Morale
+		newRegiment.myMoraleCap = regiment.MoraleCap
+		newRegiment.timesBroken = 0
+		newRegiment.moraleStack = 0
+		newRegiment.broken = false
+		newRegiment.wavering = false
+		newRegiment.canRetreat = true
+		newRegiment.recentDuelPoints = 0
+		setmetatable(newRegiment, Regiment)
+		return newRegiment
+	end
+	--getters
+	function Regiment:findCard()
+		return self.playerOwner:FindFirstChild("Units"):FindFirstChild(self.army.Nation.Value .. ", " .. self.unit.UnitType.Value .. ", " .. tostring(self.unit.Index.Value))
+	end
+	function Regiment:getMeanVector(otherRegiment, xOffset, zOffset)
+		local totalVector = Vector3.new(0,0,0)
+		local totalSoldiers = 0
+		for i, soldier in pairs(otherRegiment.soldiers:GetChildren()) do
+			if soldier ~= nil then
+				local soldierDead = soldier:FindFirstChild("Dead")
+				local soldierRoot = soldier:FindFirstChild("HumanoidRootPart")
+				if soldierDead and soldierDead.Value == false then
+					totalVector = totalVector + (soldierRoot.CFrame*CFrame.new(xOffset,0,zOffset)).p
+					totalSoldiers = totalSoldiers + 1
+				end
+			end
+		end
+		local averageVector = totalVector/totalSoldiers
+		return averageVector
+	end
+	function Regiment:intercept(otherRegiment)
+		--[[for i,v in pairs(currentStuff) do
+			v:Destroy()
+		end
+		currentStuff = {}]]--
+		local ourSpeed = self.captain:FindFirstChild("Humanoid").WalkSpeed
+		local theirSpeed = otherRegiment.captain:FindFirstChild("Humanoid").WalkSpeed
+		local theirUnitMarker = otherRegiment.marker
+		local theirGoToPart = otherRegiment.goal
+		local timeFrame = 0.25
+		local points = {}
+		local dists = {}
+		local pointsTested = 0
+		local theirTarget = theirGoToPart.Position
+		local disToGo = (theirUnitMarker.Position - theirTarget).Magnitude
+		local closestPointIndex = 0
+		local loopBroke = false
+		local theirMeanVector = meanVector(otherRegiment.soldiers, 0,0)
+		local theirMeanGoal = meanGoalVector(otherRegiment.soldiers, 0,0)
+		--print(ourSpeed)
+		--print(theirSpeed)
+		while pointsTested*timeFrame*theirSpeed < disToGo+theirSpeed do
+			pointsTested = pointsTested + 1
+			--print("Testing point " .. tostring(pointsTested))
+			local relFace = CFrame.new(theirMeanVector, theirMeanGoal)
+			local point = (relFace*CFrame.new(0,0,-theirSpeed*timeFrame*pointsTested)).p
+			local point = Vector3.new(point.X, 0, point.Z)
+			local ourDir = CFrame.new(self.marker.Position, point)
+			local ourPos = (ourDir*CFrame.new(0,0, -ourSpeed* timeFrame * pointsTested)).p
+			local ourPos = Vector3.new(ourPos.X, 0, ourPos.Z)
+			table.insert(points, point)
+			table.insert(dists, (ourPos-point).Magnitude)
+			--[[
+			local relFace = CFrame.new(theirUnitMarker.Position, theirTarget)
+			local point = (relFace*CFrame.new(0,0,-theirSpeed*timeFrame*pointsTested)).p
+			local point = Vector3.new(point.X, 0, point.Z)
+			local ourDir = CFrame.new(self.marker.Position, point)
+			local ourPos = (ourDir*CFrame.new(0,0, -ourSpeed* timeFrame * pointsTested)).p
+			local ourPos = Vector3.new(ourPos.X, 0, ourPos.Z)
+			table.insert(points, point)
+			table.insert(dists, (ourPos-point).Magnitude)
+			]]--
+			--[[local part1 = Instance.new("Part")
+			local part2 = Instance.new("Part")
+			part1.Parent = workspace
+			part2.Parent = workspace
+			part1.BrickColor, part1.Anchored, part1.CanCollide, part1.Transparency, part1.Size = BrickColor.new("Forest green"), true, false, 0.5, Vector3.new(0.4, 8, 0.4)
+			part2.BrickColor, part2.Anchored, part2.CanCollide, part2.Transparency, part2.Size = BrickColor.new("Really red"), true, false, 0.5, Vector3.new(0.4, 8, 0.4)
+			part1.Position = ourPos
+			part2.Position = point
+			table.insert(currentStuff, part1)
+			table.insert(currentStuff, part2)]]--
+			if #dists > 2 then 
+				if dists[pointsTested] > dists[pointsTested-1] then loopBroke = true break end
+			end
+		end
+		local closestDist = 500
+		local closestDistIndex = 0
+		--print("finding closest point")
+		for i, dist in pairs(dists) do
+			--print("current dist: " .. tostring(dists[i]))
+			--print("closest dist: " .. tostring(closestDist))
+			if dist < closestDist then
+				closestDist = dist
+				closestDistIndex = i
+			end
+		end
+		--print("returning point at index " .. tostring(closestDistIndex).. " which is " .. tostring(points[closestDistIndex]) )
+		local result = Vector3.new(0,0,0)
+		local theirPosCFrame = CFrame.new(theirMeanVector, theirMeanGoal)
+		if loopBroke then
+			result = (theirPosCFrame*CFrame.new(0,0,(-theirSpeed*timeFrame*closestDistIndex))).p
+		else
+			local position = CFrame.new(self.goal.Position, theirMeanGoal)
+			local newPosition = position*CFrame.new(0,0,-(position.p-theirMeanGoal).Magnitude)
+			result = newPosition.p
+		end
+		return result
+	end
+	function Regiment:printHa()
+		print("our fighting is")
+		print(self.fighting)
+	end
+	function Regiment:positionUnit()
+		snapToTerrain(self.goal)
+		local relCFrame = self.goal.CFrame*CFrame.new(-self.rowLength*(self.Spacing.Value/2),0,0)
+		if self.formation == "Line" then
+			for i, row in pairs(self.rows) do
+				local offset = (self.rowLength-#row)/2
+				for index, Soldier in pairs(row) do
+					local SoldierGoal = Soldier:FindFirstChild("GoToPart")
+					if SoldierGoal then
+						SoldierGoal.CFrame = relCFrame*CFrame.new(self.Spacing.Value*(index+offset),0,6*(i-1))
+						snapToTerrain(Soldier:FindFirstChild("GoToPart"))
+					end
+				end
+			end
+		elseif self.formation == "Skirmish" then
+			local rowOffset = 0
+			for i, row in pairs(self.rows) do
+				if i%2 == 0 then
+					--rowOffset = -1*self.Spacing.Value/4
+				else
+					--rowOffset = self.Spacing.Value/4
+				end
+				local offset = (self.rowLength-#row)/2
+				for index, Soldier in pairs(row) do
+					Soldier:FindFirstChild("GoToPart").CFrame =relCFrame*CFrame.new(self.Spacing.Value*(index+offset)+rowOffset,0,8*(i-1))
+					snapToTerrain(Soldier:FindFirstChild("GoToPart"))
+				end
+			end
+		elseif self.formation == "Square" then
+			local side = math.floor(#self.soldiers:GetChildren()/4)
+			--print(side)
+			local extra = #self.soldiers:GetChildren()%4
+			local number = 0
+			local current = 1
+			local prevCFrame = self.goal.CFrame*CFrame.new(-(side-extra)/2*self.Spacing.Value,0,-self.Spacing.Value*side/2)
+			table.insert(self.sides, prevCFrame)
+			for i, Soldier in pairs(self.soldiers:GetChildren()) do
+				if current <= 4 then
+					if number < side-1 then
+						--print("normal side")
+						number += 1
+						Soldier:FindFirstChild("GoToPart").CFrame = prevCFrame*CFrame.new(self.Spacing.Value,0,0)
+					else
+						--print("new side")
+						current += 1
+						Soldier:FindFirstChild("GoToPart").CFrame = prevCFrame*CFrame.new(0,0,0)*CFrame.Angles(0,-math.rad(90),0)
+						Soldier:FindFirstChild("GoToPart").CFrame = Soldier:FindFirstChild("GoToPart").CFrame*CFrame.new(self.Spacing.Value,0,0)
+						number = 0
+						table.insert(self.sides, Soldier:FindFirstChild("GoToPart").CFrame)
+					end 
+					prevCFrame = Soldier:FindFirstChild("GoToPart").CFrame
+				else
+					Soldier:FindFirstChild("GoToPart").CFrame = self.goal.CFrame*CFrame.new(self.Spacing.Value*number,0,0)
+					number+=1
+				end	
+				--print(Soldier:FindFirstChild("GoToPart").Orientation.Y)
+			end
+		end
+		if self.garrisonSpot and self.moving == false then
+			print("mhmh")
+			if self.garrisonSpot.unit == nil or self.garrisonSpot.unit == getUnit(self.unit) then
+				print("mhmhmh")
+				local candidates = {unpack(self.soldiers:GetChildren())}
+				local spots = {unpack(self.garrisonSpot.soldierSpots)}
+				print(#spots)
+				while #spots > 0 and #candidates > 0 do
+					local candidate = table.remove(candidates,1)
+					local spot = table.remove(spots,1)
+					candidate:FindFirstChild("GoToPart").CFrame = spot.CFrame
+				end
+			end
+		end
+	end
+	function Regiment:teleportUnit()
+		self:positionUnit()
+		for i, dummy in pairs(self.soldiers:GetChildren()) do
+			local Orders = dummy:FindFirstChild("Orders")
+			if Orders then
+				Orders.Teleport:Fire()
+			end
+			--[[if self.canCharge then
+				--wait(randomWaits[math.random(#randomWaits)])
+			else
+				wait()
+			end]]
+			wait()
+		end	
+	end
+	function Regiment:moveUnit()
+		if self:getMorale()==false and not self.canRetreat then return end
+		self:positionUnit()
+		local randomWaits = {0.075,0.1,0.125}
+		if self.garrisonSpot then
+			print("googaa")
+		end
+		if self.garrisonSpot and self.garrisonSpot.unit == getUnit(self.unit) then
+			self:teleportUnit()
+		else
+			local path = PathfindingService:CreatePath(pathParams)
+			path:ComputeAsync(self.captain:FindFirstChild("HumanoidRootPart").Position, self.goal.Position)
+			local waypoints = path:GetWaypoints()
+			local id = math.random()
+			for i, dummy in pairs(self.soldiers:GetChildren()) do
+				local Orders = dummy:FindFirstChild("Orders")
+				if Orders then
+					--print("firing " .. tostring(i))
+					Orders.Move:Fire(self.disorder,waypoints,id)
+				end
+				--[[if self.canCharge then
+					--wait(randomWaits[math.random(#randomWaits)])
+				else
+					wait()
+				end]]
+				wait()
+			end	
+		end
+	end
+	--setters
+	function Regiment:rout()
+		if self.active == false then return end
+		self.active = false
+		for i, Soldier in pairs(self.soldiers:GetChildren()) do
+			local Orders = Soldier:FindFirstChild("Orders")
+			if Orders then
+				Orders.Rout:Fire("Final")
+			end
+			Soldier:FindFirstChild("HighlighterPart"):Destroy()
+		end
+		self:findCard().TroopsLeft.Value = #self.soldiers:GetChildren()
+		wait(6)
+		self.soldiers:ClearAllChildren()
+	end
+	function Regiment:updateGrid()
+		--[[for i, Soldier in pairs(self.soldiers:GetChildren()) do
+			local SoldierDead = Soldier:FindFirstChild("Dead")
+			if SoldierDead~= nil then
+				if SoldierDead.Value == true then
+					Soldier:Destroy()
+				end
+			end
+		end]]
+		self.marker.Anchored = true
+		self.frontRow = {}
+		self.rows = {{}}
+		local currentRow = 1
+		for i, dummy in pairs(self.soldiers:GetChildren()) do
+			if dummy and dummy:FindFirstChild("Humanoid").Health > 0 then
+				local captainIndex
+				if #self.soldiers:GetChildren() > self.rowLength then
+					captainIndex = math.ceil(self.rowLength/2)
+				else
+					captainIndex = math.ceil(#self.soldiers:GetChildren())
+				end
+				if #self.rows[currentRow] == self.rowLength then
+					local row = {}
+					table.insert(self.rows, row)
+					currentRow +=1
+				end
+				if i == math.ceil(captainIndex) then
+					self.captain = dummy
+					--dummy:FindFirstChild("GoToPart").CFrame = GoToPart.CFrame
+					dummy.Name = "~Captain~"
+					--[[if self.marker:FindFirstChild("Weld") then
+						self.marker:FindFirstChild("Weld"):Destroy()
+					end]]
+					--local newWeld = Instance.new("Weld")
+					--local newWeld = self.marker:FindFirstChild("Weld")
+					--newWeld.Parent = self.marker
+					--self.marker.Anchored = false
+					--print("ooh")
+					--newWeld.Part0 = self.captain.HumanoidRootPart
+					--newWeld.Part1 = self.marker
+					--self.marker.CFrame = self.captain.HumanoidRootPart.CFrame*CFrame.new(0,1,0)
+					dummy.IsCaptain.Value = true
+					table.insert(self.frontRow, dummy)
+				else
+					local row = getRow(i, self.rowLength)
+					if row == 1 then
+						table.insert(self.frontRow, dummy)
+						dummy.Name = "Front Row, " .. tostring(i)
+					else
+						dummy.Name = "Row" .. tostring(row)..", " .. tostring(i)
+					end
+					dummy.IsCaptain.Value = false
+				end
+				table.insert(self.rows[currentRow], dummy)
+			end
+		end
+		--[[for i, row in pairs(self.rows) do
+			print("row " .. tostring(i))
+			for index, soldier in pairs(row) do
+				print(soldier)
+			end
+		end]]
+	end
+	function Regiment:updateSound()
+		if self.currentSound then self.currentSound:Stop() end
+		local Sounds = self.marker.TargetingSounds:GetChildren()
+		self.currentSound = Sounds[math.random(#Sounds)]
+		self.currentSound:Play()
+		if self.currentDrums then self.currentDrums:Stop() end
+		local Drums = self.marker.TargetingDrums:GetChildren()
+		self.currentDrums = Drums[math.random(#Drums)]
+		self.currentDrums:Play()
+	end
+	function Regiment:createUMID()
+		local newID = math.random(1,99)
+		while newID == self.UMID do
+			newID = math.random(1,99)
+		end
+		self.UMID = newID
+		return newID
+	end
+	function Regiment:getMorale()
+		if self.broken == true then
+			return false
+		end
+		return true
+	end
+	function Regiment:retreat()
+		if self.canRetreat == false then return end
+		self.designatedTarget = nil
+		self.currentTarget = nil
+		if self.behindWall or self.movingToWall then
+			self.movingToWall = false
+			self.behindWall = false
+		end
+		self.moving = true
+		if self.musketRange then
+			self:leaveGarrison()
+		end
+		self:setCanFight(false)
+		local routGoals = {}
+		for i, v in pairs(routAreas:GetChildren()) do
+			if v.Name == tostring(self.army) then
+				table.insert(routGoals, v)
+			end
+		end
+		self.goal.CFrame = routGoals[math.random(#routGoals)].CFrame
+		self:moveUnit()
+		for i,Soldier in pairs(self.soldiers:GetChildren()) do
+			local Orders = Soldier:FindFirstChild("Orders")
+			if Orders then
+				Orders.Rout:Fire("Start")
+			end
+		end
+		self.canRetreat = false
+		self.label.CurrentTarget.Text = "Running From Battle!"
+	end
+	function Regiment:regroup()
+		self.canRetreat = true
+		self.goal.Position = self.marker.Position
+		self.goal.CFrame = self.goal.CFrame*CFrame.Angles(0,math.rad(180),0)
+		snapToTerrain(self.goal)
+		for i,Soldier in pairs(self.soldiers:GetChildren()) do
+			local Orders = Soldier:FindFirstChild("Orders")
+			if Orders then
+				Orders.Rout:Fire("End")
+			end
+		end
+		self:updateGrid()
+		self:moveUnit()
+	end
+	function Regiment:animateFrontRow(animation)
+		for i, Soldier in pairs(self.rows[1]) do
+			if Soldier~= nil then
+				local SoldierAnim = Soldier:FindFirstChild("CurrentAnim")
+				if SoldierAnim ~= nil then
+					SoldierAnim.Value = animation
+				end
+			end
+		end
+	end
+	function Regiment:animateRegiment(animation)
+		for i, Soldier in pairs(self.soldiers:GetChildren()) do
+			if Soldier~= nil then
+				local SoldierAnim = Soldier:FindFirstChild("CurrentAnim")
+				if SoldierAnim ~= nil then
+					SoldierAnim.Value = animation
+				end
+			end
+		end
+	end
+	function Regiment:update()
+		local uniqueRange
+		if self.musketRange then
+			uniqueRange = self.musketRange
+		end
+		local rangeConnection
+		local count = 0
+		rangeConnection = GameTime:GetPropertyChangedSignal("Value"):Connect(function()
+			if not self.active then
+				rangeConnection:Disconnect()
+			end
+			local markPos = nil
+			if self.captain then
+				markPos = self.captain:FindFirstChild("HumanoidRootPart").Position
+			elseif self.soldiers:GetChildren()[1] then
+				markPos = self.soldiers:GetChildren()[1]:FindFirstChild("HumanoidRootPart").Position
+			else
+				markPos = meanVector(self.soldiers,0,0)
+			end
+			self.marker.Position = markPos
+			if uniqueRange then
+				uniqueRange.Position = self.marker.Position
+				uniqueRange.Orientation = Vector3.new(uniqueRange.Orientation.X, self.goal.Orientation.Y-90, uniqueRange.Orientation.Z) 
+				snapToTerrain(uniqueRange)
+			end
+			self.meleeRange.Position = self.marker.Position
+			snapToTerrain(self.meleeRange)
+			self:findCard().TroopsLeft.Value = #self.soldiers:GetChildren()
+			--[[count+=1
+			if count == 30 then
+				print("updating")
+				count = 0
+				self:moveUnit()
+			end]]
+		end)
+	end
+	function Regiment:checkInMelee()
+		local count = 0
+		for i, soldier in pairs(self.soldiers:getChildren()) do
+			local inDuel = soldier:FindFirstChild("InDuel")
+			if inDuel and inDuel.Value == true then
+				count +=1
+			end
+		end
+		return count
+	end
+	function Regiment:setCanFight(value)
+		for i, soldier in pairs(self.soldiers:GetChildren()) do
+			local soldierCanFight = soldier:FindFirstChild("CanFight")
+			local soldierDead = soldier:FindFirstChild("Dead")
+			if soldierCanFight and soldierDead and soldierDead.Value == false then
+				soldierCanFight.Value = value
+			end
+		end
+	end
+	function Regiment:setupMorale()
+		--initial morale variables
+		local waveringCount = {}
+		local duelPoints = {}
+		local waveringLength = 30
+		local deathsInInterval = {}
+		local capMorale = self.morale
+		local maxMorale = self.morale
+		local interval = 0.5
+		local waveringTimes = math.ceil(waveringLength/interval)
+		local lastTroopCount = #self.soldiers:GetChildren()
+		local casualtyAlert = self.moraleAlert:Clone()
+		casualtyAlert.Parent = self.unit
+		local fightingAlert = self.moraleAlert:Clone()
+		fightingAlert.Parent = self.unit
+		local troopAlert = self.moraleAlert:Clone()
+		troopAlert.Parent = self.unit
+		local unitHealth = self.maxTroops*self.soldiers:FindFirstChildOfClass("Model"):FindFirstChild("Humanoid").MaxHealth
+		local timeInMelee = 0
+		--counts deaths in interval
+		for i = 1, 7/interval, 1 do
+			table.insert(deathsInInterval, 0)
+		end
+		for i = 1, 10/interval, 1 do
+			table.insert(duelPoints, 0)
+		end
+		--counts times wavered
+		for i = 1, waveringTimes, 1 do
+			table.insert(waveringCount, false)
+		end
+		while maxMorale>0 do			
+			wait(interval)
+			--morale variables related to other units proximities(allied/enemies)
+			local start = tick()
+			local ourUnits = 0
+			local enemyUnits = 0
+			local closeFriends = 0
+			local closeEnemies = 0
+			
+			local troopRatio = (#self.soldiers:GetChildren()/self.maxTroops)
+			
+			--MORALE CALCULATIONS
+			if maxMorale > (0.25 + 0.75*troopRatio)*capMorale then
+				maxMorale-=0.01
+			end
+			for i, v in pairs(GameUnits) do
+				if v.army == self.army and v:getMorale() == true then
+					if (self.marker.CFrame.p-v.marker.CFrame.p).Magnitude <= 225 and closeFriends < 2 then
+						closeFriends+=1
+					else
+						ourUnits+=1
+					end
+				elseif v.army ~= self.army and v:getMorale() == true then
+					if (self.marker.CFrame.p-v.marker.CFrame.p).Magnitude <= 225 and closeEnemies < 2 then
+						closeEnemies+=1
+					else
+						enemyUnits+=1
+					end
+				end
+			end
+			--morale multiplier
+			local multiplier = (1+0.04*ourUnits+0.12*closeFriends-0.04*enemyUnits-0.12*closeEnemies)*(0.25+troopRatio*0.75)*0.4
+			
+			local plusMultiplier = (0.25+troopRatio*0.75)+math.log(1+(ourUnits/2),2)+math.log(1+closeFriends,2)
+			
+			local minusMultiplier = math.log(1+(enemyUnits/2),2)+math.log(1+closeEnemies,2)
+			
+			local newMultiplier = plusMultiplier-minusMultiplier
+			
+			if self:getMorale() == false then
+				newMultiplier = plusMultiplier*(15/(2+self.timesBroken))
+			end
+			if self.morale < maxMorale then
+				self.morale = self.morale + 0.01 * newMultiplier
+			else
+				if maxMorale < (0.25 + 0.75*troopRatio)*capMorale then
+					maxMorale+=0.01
+				end
+			end
+			local recentDeathSum = 0
+			for i, value in pairs(deathsInInterval) do
+				recentDeathSum = recentDeathSum + value
+			end
+			if self.morale > -capMorale*0.5 and recentDeathSum > 0 then
+				self.morale = self.morale - ((2.5*2^(2*(3*(recentDeathSum/self.maxTroops)))/10)*0.2*(1+0.3*(self.timesBroken/2)))
+			end
+			--print(self.moraleStack)
+			local num
+			if self.moraleStack > 0.3 then
+				num = 0.3*self.moraleStack
+			else
+				num = self.moraleStack
+			end
+			if self.morale > -capMorale*0.5 then
+				--print("the number is " .. tostring(num))
+				self.morale -= num
+			end
+			self.moraleStack -= num
+			if recentDeathSum > 0 then
+				local level
+				if recentDeathSum > (1/4)*self.maxTroops then
+					level = "HEAVY"
+					casualtyAlert.TextColor3 = Color3.fromRGB(170, 0, 0)
+					casualtyAlert.LayoutOrder = 1
+				elseif recentDeathSum > (1/8)*self.maxTroops then
+					level = "Medium"
+					casualtyAlert.TextColor3 = Color3.fromRGB(222, 142, 13)
+					casualtyAlert.LayoutOrder = 2
+				else
+					level = "Minor"
+					casualtyAlert.TextColor3 = Color3.fromRGB(12, 75, 222)
+					casualtyAlert.LayoutOrder = 3
+				end
+				casualtyAlert.Text = level .. " recent casualties!"
+				casualtyAlert.Parent = self.moraleAlertsGui
+			else
+				casualtyAlert.Parent = self.unit
+			end
+			for i = 1 , #duelPoints-1, 1 do
+				duelPoints[i] = duelPoints[i+1]
+			end
+			duelPoints[#duelPoints] = self.recentDuelPoints
+			self.recentDuelPoints = 0
+			local recentFightSum = 0
+			for i, value in pairs(duelPoints) do
+				recentFightSum = recentFightSum + value
+			end
+			if self:checkInMelee() > 0 then
+				timeInMelee+= (self:checkInMelee()/#self.soldiers:GetChildren())
+				if self.morale > -capMorale*0.5 and recentFightSum < 0 then
+					self.morale = self.morale + (recentFightSum/(unitHealth*4))
+				elseif self.morale < maxMorale and recentFightSum > 0 then
+					self.morale = self.morale + (recentFightSum/(unitHealth*6))
+				end
+				if self.morale > -capMorale*0.5 then
+					self.morale -= math.log10(timeInMelee/interval)*0.035
+				end
+				local level
+				if recentFightSum > 0 then
+					if recentFightSum > (1/6)*unitHealth then
+						level = "Heavily winning"
+						fightingAlert.TextColor3 = Color3.fromRGB(0, 85, 0)
+						fightingAlert.LayoutOrder = 5
+					else
+						level = "Winning"
+						fightingAlert.TextColor3 = Color3.fromRGB(85, 170, 0)
+						fightingAlert.LayoutOrder = 4
+					end
+				elseif recentFightSum == 0 then
+					level = "Tying"
+					fightingAlert.TextColor3 = Color3.fromRGB(170, 255, 0)
+					fightingAlert.LayoutOrder = 3
+				elseif recentFightSum < 0 then
+					if recentFightSum < -(1/6)*unitHealth then
+						level = "HEAVILY LOSING"
+						fightingAlert.TextColor3 = Color3.fromRGB(255, 0, 127)
+						fightingAlert.LayoutOrder = 1
+					else
+						level = "Losing"
+						fightingAlert.TextColor3 = Color3.fromRGB(170, 0, 255)
+						fightingAlert.LayoutOrder = 2
+					end
+				end
+				fightingAlert.Text = level .. " current melee!"
+				fightingAlert.Parent = self.moraleAlertsGui
+			else
+				timeInMelee = 0
+				fightingAlert.Parent = self.unit
+			end
+			
+			if self.morale < maxMorale - 0.25*capMorale then
+				maxMorale = maxMorale - (maxMorale-self.morale)/100
+			end
+			--print(self.ID .. "'s morale is " .. tostring(self.morale))
+			if troopRatio <= 0.6 then
+				local level
+				if troopRatio > 0.45 then
+					level = "Heavy"
+					troopAlert.TextColor3 = Color3.fromRGB(34, 34, 34)
+					troopAlert.LayoutOrder = 4
+				elseif troopRatio > 0.3 then
+					level = "Signifigant"
+					troopAlert.TextColor3 = Color3.fromRGB(21, 21, 21)
+					troopAlert.LayoutOrder = 3
+				else
+					level = "CRITICAL"
+					troopAlert.TextColor3 = Color3.fromRGB(0, 0, 0)
+					troopAlert.LayoutOrder = 2
+				end
+				troopAlert.Text = level .. " army losses!"
+				troopAlert.Parent = self.moraleAlertsGui
+				troopAlert.BackgroundTransparency = 0.4
+				if self.morale > -capMorale*0.5 then
+					--print("the number is " .. tostring(num))
+					self.morale -= (0.1 + 0.2*(1-(2*troopRatio)))
+				end
+			end
+			--MORALE GAMEPLAY EFFECTS
+			if self:getMorale() == true then
+				if self.morale <=0 and self.broken == false then
+					self.wavering = true
+					local waveringCheck = 0
+					for i, v in pairs(waveringCount) do
+						if v == true then
+							waveringCheck+=1
+						end
+					end
+					if waveringCheck == waveringTimes or self.morale <= -capMorale*0.5 then
+						if waveringCheck ~= waveringTimes then
+							--print("broke at " .. tostring(self.morale))
+						end
+						for i, dummy in pairs(self.soldiers:GetChildren()) do
+							local distance = (dummy:FindFirstChild("HumanoidRootPart").CFrame.p - self.marker.CFrame.p).Magnitude
+							if distance > 200 then
+								local Orders = dummy:FindFirstChild("Orders")
+								local SoldierGoal = dummy:FindFirstChild("GoToPart")
+								if SoldierGoal then
+									SoldierGoal.CFrame = self.marker.CFrame.p
+									snapToTerrain(dummy:FindFirstChild("GoToPart"))
+								end
+								if Orders then
+									Orders.Teleport:Fire()
+								end
+							end
+						end
+						self.broken = true
+						self.timesBroken +=1
+						self.morale = 0
+					end
+					if self.timesBroken == 3 or self.morale <= -capMorale*(0.5+0.5*(2-self.timesBroken/2)) then
+						maxMorale = 0
+					end
+				end
+			else
+				if maxMorale < (0.25 + 0.75*troopRatio)*capMorale then
+					maxMorale += (0.05 * troopRatio)*(self.baseSpeed/10)
+				end	
+				if self.morale >= maxMorale and maxMorale >= (0.25 + 0.75*troopRatio)*capMorale then
+					self.broken = false
+					self:regroup()
+				end
+			end
+			for i = 1 , waveringTimes-1, 1 do
+				waveringCount[i] = waveringCount[i+1]
+			end
+			waveringCount[waveringTimes] = self.wavering
+			--print(self.ID)
+			for i = 1, #deathsInInterval-1, 1 do
+				deathsInInterval[i] = deathsInInterval[i+1]
+			end
+			deathsInInterval[#deathsInInterval] = lastTroopCount - #self.soldiers:GetChildren()
+			lastTroopCount = #self.soldiers:GetChildren()
+			if maxMorale>capMorale then
+				maxMorale = capMorale
+			end
+			if self.morale > capMorale then
+				self.morale = capMorale
+			end
+			self.myMorale.Value = Round(self.morale)
+			self.myMoraleCap.Value = Round(maxMorale)
+			self.wavering = false
+			if self:getMorale()==false then
+				
+				self:retreat()
+			end
+			
+			--MORALE INDICATORS
+			if self:getMorale() == true then
+				if self.morale <=0 and self.broken == false then
+					self.inGameGui.Frame.Morale.Text = "Wavering..."
+					--print("wavering, " .. tostring(waveringCheck))
+				elseif self.morale <= capMorale/4 then
+					--self.broken = false
+					self.inGameGui.Frame.Morale.Text = "Low"
+				elseif self.morale <=2*capMorale/4 then
+					self.inGameGui.Frame.Morale.Text = "Concerning"
+				elseif self.morale <=3*capMorale/4 then
+					self.inGameGui.Frame.Morale.Text = "Fine"
+				else
+					self.inGameGui.Frame.Morale.Text = "Eager"
+				end
+			else
+				if maxMorale<=0 then
+					self.inGameGui.Frame.Morale.Text = "SHATTERED!"
+				else
+					self.inGameGui.Frame.Morale.Text = "Broken!"
+				end
+			end
+			if self.morale < 0 then
+				--print(self.morale)
+			end
+			--print(tick()-start)
+		end
+	end
+	function Regiment:checkInRange(unit, range)
+		local enemies = unit.soldiers
+		local Distance = range
+		for i , enemy in pairs(enemies:GetChildren()) do
+			if enemy ~= nil then
+				local enemyRoot = enemy:FindFirstChild("HumanoidRootPart")
+				if enemyRoot ~= nil then
+					--local posDifference = self.marker.CFrame.p-enemyRoot.CFrame.p
+					--local closestDistance = posDifference.Magnitude
+					local closestDistance = getFlatMagnitude(self.marker.CFrame.p, enemyRoot.CFrame.p)
+					if closestDistance < Distance then
+						--Distance = closestDistance
+						return true, closestDistance
+					end
+				end	
+			end
+		end
+		return false, nil
+	end
+	function Regiment:getInRange(range)
+		if self.musketRange then
+			self:leaveGarrison()
+		end
+		local posDifference = self.marker.CFrame.p-meanVector(self.currentTarget.soldiers,0, -5)
+		local Distance = posDifference.Magnitude
+		local currentGoal = self.currentTarget.goal.Position
+		print(currentGoal)
+		local intPoint = self:intercept(self.currentTarget)
+		self.goal.CFrame = CFrame.new(self.goal.Position, intPoint)
+		self.goal.Orientation = Vector3.new(0, self.goal.Orientation.Y, 0)
+		self.goal.Position = intPoint
+		if self.behindWall or self.movingToWall then
+			self.movingToWall = false
+			self.behindWall = false
+		end
+		self:moveUnit()
+		local reset = 0
+		local inRange = false
+		inRange = self:checkInRange(self.currentTarget, range)
+		--print("charging now")
+		while not inRange and self.currentTarget~= nil do 
+			inRange = self:checkInRange(self.currentTarget, range)
+			--Distance = (self.marker.Position-self.currentTarget.marker.Position).Magnitude
+			local goalCheck = self.currentTarget.goal.Position
+			reset += 0.25
+			if self.currentTarget ~= nil then
+				if goalCheck ~= currentGoal or reset >= 7 then
+					print("Target changed course or reset, calculating...")
+					currentGoal = self.currentTarget.goal.Position
+					intPoint = self:intercept(self.currentTarget)
+					self.goal.CFrame = CFrame.new(self.goal.Position, intPoint)
+					self.goal.Orientation = Vector3.new(0, self.goal.Orientation.Y, 0)
+					self.goal.Position = intPoint
+					self:moveUnit()
+				end
+			end
+			--print(Distance)
+			wait(1)
+		end
+		if self.designatedTarget and self.currentTarget then
+			self.goal.CFrame = self.marker.CFrame
+			self.goal.CFrame = CFrame.new(self.goal.Position,self.currentTarget.goal.Position)
+			snapToTerrain(self.goal)
+			self:updateGrid()
+			self:moveUnit()
+		end
+	end
+	
+	--setupfunction
+	function Regiment:setup()
+		print("Setup")
+		self.goal.Transparency = 1
+		local unitCard = ReplicatedStorage.UnitCards:FindFirstChild(self.unit.UnitType.Value)
+		self.meleeStat = unitCard.Melee.Value
+		self.stealthStat = unitCard.Stealth.Value
+		local formation = unitCard:FindFirstChild("Formation")
+		
+		if formation then
+			table.insert(self.formations, formation.Value)
+		end
+		--print(self.meleeStat)
+		--print(self.stealthStat)
+		for i, Soldier in pairs(self.soldiers:GetChildren()) do
+			local Orders = Soldier:FindFirstChild("Orders")
+			local values = {self.meleeStat}
+			if Orders then
+				Orders.Setup:Fire("General", values)
+			end
+		end
+		for i = 1, 9, 1 do
+			table.insert(self.sinceFired, false)
+		end
+		local Dummies = self.soldiers
+		self:updateGrid()
+		Dummies.ChildAdded:Connect(function()
+			self.playerOwner:FindFirstChild("Units"):FindFirstChild(self.army.Nation.Value .. ", " .. self.unit.UnitType.Value .. ", " .. tostring(self.unit.Index.Value)).TroopsLeft.Value = #self.soldiers:GetChildren()
+			if self.currentTarget == nil then
+				self:updateGrid()
+				self:moveUnit()
+			end
+			return end)
+		Dummies.ChildRemoved:Connect(function()
+			if self.active and GameTime>0 then
+				self:findCard().TroopsLeft.Value = #self.soldiers:GetChildren()
+			end
+		end)
+		Dummies.ChildRemoved:Connect(function()
+			--print("One of our troops died!!!")
+			--self.MoraleHit:Fire((1/self.maxTroops)*25, 5, 0.5, false)
+			self.label.AliveTroops.Text = "Troops: " .. tostring(#self.soldiers:GetChildren()) .. "/" .. tostring(self.maxTroops)
+			self.profile.AliveTroops.Text = "Troops: " .. tostring(#self.soldiers:GetChildren()) .. "/" .. tostring(self.maxTroops)
+			
+			if self.currentTarget == nil then
+				self:updateGrid()
+				self:moveUnit()
+			end
+			if #Dummies:GetChildren() == 0 and self.active then
+				print(self.ID .. " has been wiped out.")
+				self.active = false
+				self.label:Destroy()
+				self.profile:Destroy()
+				self.unit:Destroy()
+			end
+			return end)
+		for i, player in pairs(Players:GetChildren()) do
+			if player.Name == self.owner.Value then
+				UnitMover:FireClient(player, "Add", self.unit)
+			end
+		end
+		for i, Soldier in pairs(Dummies:GetChildren()) do
+			Soldier:FindFirstChild("GoToPart").Transparency = 1
+			local SelectOrb = Soldier:FindFirstChild("SelectOrb")
+			if SelectOrb~= nil then
+				SelectOrb.ClickDetector.MouseHoverEnter:Connect(function(player)
+					if self:getMorale() == true then
+						if tostring(player) == self.owner.Value then
+							if self.designatedTarget then
+								UnitMover:FireClient(player, "Hover target", self.unit, nil, self.designatedTarget.unit)
+								--UnitMover:FireClient(player, "Hover", self.unit)
+							else
+								UnitMover:FireClient(player, "Hover", self.unit)
+							end
+							self.label.Visible = true
+						elseif self.owner.Value ~= tostring(player) then
+							print("enemy hovered on me")
+							UnitTargeter:FireClient(player, "Hover", self.unit)
+						end
+					else
+						UnitMover:FireClient(player, "Hover retreat", self.unit)
+					end
+					return end)
+				SelectOrb.ClickDetector.MouseHoverLeave:Connect(function(player)
+					if tostring(player) == self.owner.Value then
+						UnitMover:FireClient(player, "Hover end", self.unit)
+						self.label.Visible = false
+					elseif self.owner.Value ~= tostring(player) then
+						UnitTargeter:FireClient(player, "Hover end", self.unit)
+					end
+					return end)
+				SelectOrb.ClickDetector.MouseClick:Connect(function(player)
+					if self:getMorale() == false then return end
+					if self.owner.Value == tostring(player) then
+						UnitMover:FireClient(player, "Select unit" ,self.unit, self.goal)
+					end
+					return end)
+				SelectOrb.ClickDetector.RightMouseClick:Connect(function(player)
+					if self:getMorale() == false then return end
+					if self.owner.Value ~= tostring(player) then
+						print("enemy targeted me")
+						UnitTargeter:FireClient(player, "Target", self.unit, self.goal)
+					end
+					return end)
+			end
+		end
+		SelectCheck.OnServerEvent:Connect(function(player, regi)
+			if self.owner.Value == tostring(player) and self.unit == regi and self:getMorale() == true then
+				UnitMover:FireClient(player, "Select unit" ,self.unit, self.goal)
+			end
+		end)
+		clickSender.OnServerEvent:Connect(function(player, army, regi, action)
+			if self.owner.Value == tostring(player) then
+				if self.army.Name == army then
+					if self.unit.Name == regi then
+						if action == "Hover" then
+							UnitMover:FireClient(player, "Hover", self.unit)
+						elseif action == "HoverStop" then
+							UnitMover:FireClient(player, "Hover end", self.unit)
+						elseif action == "Select" then
+							if self:getMorale() == false then return end
+							UnitMover:FireClient(player, "Select unit" ,self.unit, self.goal)
+						end
+					end
+				end
+			end
+		end)
+		UnitMover.OnServerEvent:Connect(function(player, Action, Position, index, newPos, Regiment, PrevUnit)
+			if self:getMorale() == false then return end
+			if self.owner.Value == tostring(player) and Regiment == self.unit then
+				self.movingToWall = false
+				self.behindWall = false
+				if self.musketRange then
+					self:leaveGarrison()	
+				end
+			end
+			if self.owner.Value == tostring(player) and Regiment == self.unit and Position == "Garrison" then
+				if self.musketRange then
+					self.movingToGarrison = true
+					self.goal.CFrame = PrevUnit:FindFirstChild("WaitArea").CFrame
+					self.garrisonSpot = findGarrison(PrevUnit)
+					if self.garrisonSpot then
+						--print("eheheheheee")
+					end
+				end
+			elseif self.owner.Value == tostring(player) and Regiment == self.unit and Position == "Wall" then
+				local wholeWall = findWall(PrevUnit)
+				print(newPos.p)
+				
+				local rayOrigin = Vector3.new(newPos.p.X, self.goal.Position.Y, newPos.p.Z)
+				local rayGoal = (newPos*CFrame.new(0,0,-10)).p
+				local rayDirection = rayGoal - rayOrigin
+				
+				local raycastResult = workspace:Raycast(rayOrigin, rayDirection, wallChecker)
+				print("About to move to wall")
+				print(raycastResult)
+				if raycastResult and self.musketRange then
+					print("Getting the wall position")
+					self.goal.CFrame = newPos*CFrame.new(0,0,0)
+					self.goal.Position = raycastResult.Position
+					self.goal.CFrame = self.goal.CFrame*CFrame.new(0,0,1)
+					self.movingToWall = true
+				end
+			elseif self.owner.Value == tostring(player) and Regiment == self.unit and Position == "Mainpos" then
+				self.goal.CFrame = newPos*CFrame.new(self.rowLength*(self.Spacing.Value/2),0,0)
+				self.goal.Transparency = 1
+			elseif self.owner.Value == tostring(player) and Regiment == self.unit and Position == "Otherpos" then
+				wait()
+				local average = ((getUnit(PrevUnit).rowLength*getUnit(PrevUnit).Spacing.Value)+self.rowLength*(self.Spacing.Value))/2
+				self.goal.CFrame = PrevUnit:FindFirstChild("GoToPart").CFrame*CFrame.new(average+2, 0, 0)
+				self.goal.Transparency = 1
+			end
+			if self.owner.Value == tostring(player) and Regiment == self.unit then
+				self.inGameGui.ChargeStrength.Value.Value = 0
+				self.inGameGui.ChargeStrength.Visible = false
+				print(index .. " got order")
+				if selectionStage then
+					self:teleportUnit()
+				else
+					if self.charging then self.charging = false end
+					self.commandOn = false
+					self.designatedTarget = nil
+					self.currentTarget = nil
+					self.label.CurrentTarget.Text = "Marching..."
+					self.moving = true
+					for i, Soldier in pairs(self.soldiers:GetChildren()) do
+						local Orders = Soldier:FindFirstChild("Orders")
+						if Orders then
+							Orders.EndDuel:Fire()
+						end
+					end
+					self:updateGrid()
+					self:updateSound()
+					--self:abortMelee()
+					self:setCanFight(false)
+					self:moveUnit()
+				end
+			end
+			return end)
+		UnitTargeter.OnServerEvent:Connect(function(player, Regiment, targetReg)
+			print("Unit Targeter Event")
+			--if self:getMorale() == false then return end
+			if Regiment == self.unit then
+				if self.ChargeEnd and getUnit(targetReg).garrisonSpot and getUnit(targetReg).garrisonSpot.unit == getUnit(targetReg) then print("Walaladlwa") return end
+				self.designatedTarget = nil
+				self.currentTarget = nil
+				--self:updateGrid()
+				self:updateSound()
+				self:abortMelee()
+				self.designatedTarget = getUnit(targetReg)
+				self.currentTarget = self.designatedTarget
+				self.label.CurrentTarget.Text = "Current Designated Target: " .. self.designatedTarget.ID
+				print(self.ID .. " got target")
+				--self.goal.CFrame = self.marker.CFrame
+				self:uniqueTarget()
+			end
+		end)
+		rangeSetup.Event:Connect(function(Regiment)
+			if Regiment == self.unit then
+				self:update()
+			end
+		end)
+		moraleSetup.Event:Connect(function(Regiment)
+			if Regiment == self.unit then
+				self:setupMorale()
+			end
+		end)
+		self.MoraleHit.Event:Connect(function(amount, times, timeDelay, alert)
+			wait(timeDelay)
+			self.moraleStack += 0.5*amount
+			local newAlert
+			local level
+			newAlert = self.moraleAlert:Clone()
+			if amount > 2 then
+				newAlert.TextColor3 = Color3.fromRGB(170, 0, 0)
+				newAlert.LayoutOrder = 1
+				level = "HEAVY "
+			elseif amount > 1 then
+				newAlert.TextColor3 = Color3.fromRGB(222, 142, 13)
+				newAlert.LayoutOrder = 2
+				level = "Medium "
+			else
+				newAlert.TextColor3 = Color3.fromRGB(12, 75, 222)
+				newAlert.LayoutOrder = 3
+				level = "Minor "
+			end
+			newAlert.Text = level .. alert .. "! " .. tostring(times) .. " second(s)"
+			newAlert.Parent = self.moraleAlertsGui
+			for i = 1, times, 1 do
+				--self.morale = self.morale - amount/times
+				if newAlert then
+					newAlert.Text = level .. alert .. "! " .. tostring(times-i+1) .. " second(s)"
+				end
+				wait(1)
+			end
+			if newAlert then newAlert:Destroy() end
+		end)
+		self:UniqueSetup()
+	end
+	--Infantry Regiment
+	Infantry = {}
+	Infantry.__index = Infantry
+	setmetatable(Infantry, Regiment)
+	function Infantry.new(object)
+		local newInfantry = Regiment.new(object)
+		newInfantry.musketRange = object.MusketRange
+		newInfantry.wasAttacked = false
+		newInfantry.movingToWall = false
+		newInfantry.behindWall = false
+		newInfantry.garrisonSpot = nil
+		newInfantry.garrisoned = false
+		newInfantry.currentMode = "Volley"
+		newInfantry.baseSpeed = 10
+		newInfantry.firingSequence = {}
+		newInfantry.meleeSequence = {}
+		newInfantry.baseRange = 0
+		newInfantry.range = 0 --regiment.Range.Value
+		newInfantry.VolleyCalculator = object.VolleyCalculator
+		setmetatable(newInfantry, Infantry)
+		return newInfantry
+	end
+	function Infantry:abortMelee()
+		if self.wasAttacked then
+			self.fighting = false
+			self.label.CombatMode.Text = "Mode: Firing " .. self.currentMode
+			self.wasAttacked = false
+		end
+	end
+	function Infantry:uniqueModifier()
+		return 0
+	end
+	function Infantry:getTarget()
+		if self.designatedTarget then
+			self.currentTarget = self.designatedTarget
+			return 
+		end
+		--print("targeting stage 3")
+		self.currentTarget = nil
+		if self.currentTarget == nil then
+			local candidates = {}
+			local targets = {}
+			for i, enemyUnit in pairs(GameUnits) do
+				RunService.Heartbeat:Wait()
+				local forward = self.goal.CFrame.lookVector
+				local displacement = enemyUnit.marker.Position - self.marker.Position -- (direction)
+				local amountForward = forward:Dot(displacement)
+				if self.garrisonSpot and self.garrisonSpot.unit == getUnit(self.unit) then
+					for i, v in pairs(self.garrisonSpot.soldierSpots) do
+						local thisForward = v.CFrame.lookVector
+						local newDisplacement = enemyUnit.marker.Position - v.Position
+						local thisAmountForward = thisForward:Dot(newDisplacement)
+						if thisAmountForward > amountForward then
+							amountForward = thisAmountForward
+							--displacement = newDisplacement
+						end
+					end
+				end
+				local distance = displacement.Magnitude
+				if enemyUnit.army ~= self.army and self.currentTarget == nil and enemyUnit.active == true and enemyUnit.visible == true and amountForward > 0 then
+					if distance < self.range then
+						table.insert(candidates, enemyUnit)
+					else
+						print("cant do it")
+					end
+				end
+			end
+			local highestDanger = 1
+			for i, enemyUnit in pairs(candidates) do
+				RunService.Heartbeat:Wait()
+				local thisDanger = 1
+				if enemyUnit.charging then
+					if enemyUnit.designatedTarget == getUnit(self.unit) then
+						thisDanger = 6
+					--elseif enemyUnit.charging == true then
+						--thisDanger = 5
+					end
+				elseif enemyUnit.currentTarget == getUnit(self.unit) then
+					thisDanger = 4
+				elseif enemyUnit.currentTarget ~= nil then
+					thisDanger = 3
+				elseif enemyUnit:getMorale()==true then
+					thisDanger = 2
+				else
+					thisDanger = 1
+				end
+				if thisDanger >= highestDanger then
+					if thisDanger > highestDanger then
+						highestDanger = thisDanger
+						targets = {}
+					end
+					table.insert(targets, enemyUnit)
+				end
+			end
+			--print("highest danger is " .. tostring(highestDanger))
+			--print("number of highest danger targets: ".. tostring(#targets))
+			local closestDistance = self.range
+			local closestUnit
+			for i, enemyUnit in pairs(targets) do
+				if enemyUnit.army ~= self.army and self.currentTarget == nil and enemyUnit.active == true and enemyUnit.visible == true then
+					RunService.Heartbeat:Wait()
+					local unitInRange
+					local unitDistance
+					unitInRange, unitDistance = self:checkInRange(enemyUnit, self.range)
+					if unitInRange then
+						if unitDistance < closestDistance then
+							closestUnit = enemyUnit
+							closestDistance = unitDistance
+							print(self.unit)
+							print("done2")
+						end
+					end
+				end
+			end
+			if self.garrisonSpot and self.garrisonSpot.unit == getUnit(self.unit) and closestUnit then
+				self.currentTarget = closestUnit
+				print("Foofe")
+			end
+			if closestUnit and self.garrisonSpot == nil then
+				local forward = self.goal.CFrame.lookVector
+				local displacement = closestUnit.marker.Position - self.marker.Position -- (direction)
+				local amountForward = forward:Dot(displacement)
+				local canTarget = true
+				if self.formation ~= "Square" and self.inFormation == false and amountForward < 10 then
+					canTarget = false
+				end
+				if canTarget then
+					--print("Now targeting: " .. tostring(closestUnit.unit.Parent) .. ", " .. tostring(closestUnit.unit))
+					self.currentTarget = closestUnit
+					if self.movingToWall then
+						self.movingToWall = false
+						self.behindWall = true
+					end
+					if amountForward < 15 and self.fighting == false and not self.behindWall and self.garrisonSpot == nil then
+						self.goal.CFrame = CFrame.new(self.goal.Position, closestUnit.goal.Position)
+						self:moveUnit()
+					end
+				end
+			else
+				
+			end
+		end
+	end
+	function Infantry:uniqueTarget()
+		if self.moving then
+			if self.fighting then
+				self:getInRange(30)
+			else
+				self:getInRange(self.range)
+			end
+		end
+	end
+	function Infantry:enterGarrison()
+		--print("ooohahhaha")
+		if self.garrisonSpot and self.garrisonSpot.unit == nil then
+			self.rowLength = 8
+			self.movingToGarrison = false
+			--print("ooohahhaha")
+			self.goal.CFrame = self.garrisonSpot.garrisonArea.CFrame
+			self.garrisonSpot.unit = getUnit(self.unit)
+			self:teleportUnit()
+			self:setCanFight(true)
+		elseif self.garrisonSpot and self.garrisonSpot.unit ~= nil and self.garrisonSpot.unit ~= getUnit(self.unit) then
+			--self.garrisonSpot = nil
+		end
+	end
+	function Infantry:leaveGarrison()
+		if self.garrisonSpot and self.garrisonSpot.unit == getUnit(self.unit) then
+			print("weeeheeehee")
+			self.goal.CFrame = self.garrisonSpot.waitArea.CFrame
+			self.garrisonSpot.unit = nil
+			self.garrisonSpot = nil
+			self:teleportUnit()
+		end
+		self.garrisonSpot = nil
+	end
+	function Infantry:UniqueSetup()
+		local unitCard = ReplicatedStorage.UnitCards:FindFirstChild(self.unit.UnitType.Value)
+		--individual soldier stats for setup
+		local MaxTroops = #self.soldiers:GetChildren()
+		if self.playerOwner then
+			local playerGui = self.playerOwner.PlayerGui
+			if playerGui ~= nil then
+				self.label.Parent = playerGui:FindFirstChild("UnitsGui")
+				self.label:FindFirstChildOfClass("LocalScript").Disabled = false
+				self.label.Visible = false
+				local armyBar = playerGui:FindFirstChild("BottomBar"):FindFirstChild(tostring(self.army))
+				if armyBar ~= nil then
+					self.profile.Parent = armyBar
+					self.profile:FindFirstChildOfClass("LocalScript").Disabled = false
+					self.profile.Regiment.Value = tostring(self.unit)
+					armyBar.Visible = true
+					local currentProfiles = 0
+					self.profile.Position = UDim2.new(0.1*self.index-0.1, 0, 0, 0)
+				end
+			else
+				print("couldnt find gui")
+			end
+		end
+		local function targetStage()
+			repeat
+				wait(1)
+				self:getTarget()
+				--print("looking for target")
+			until self.currentTarget ~= nil or self.moving
+		end
+		local function rangeStage()
+			self:updateGrid()
+			self:moveUnit()
+			if self.designatedTarget ~= nil then
+				print("Making sure unit is in range of target")
+				local inRange = self:checkInRange(self.designatedTarget, self.range)
+				if not inRange then
+					print("Need to move")
+					if self.fighting then
+						self:getInRange(30)
+					else
+						self:getInRange(self.range)
+					end
+				end
+				print("Check complete")
+			end
+		end
+		local function fireStage()
+			local inRange = self:checkInRange(self.currentTarget, self.range)
+			local enemyFacingUs = isForward(self.currentTarget.marker, self.marker, 1)
+			--local numFired = 0
+			local enemyDistance = getFlatMagnitude(self.marker.CFrame.p, self.currentTarget.marker.CFrame.p)
+			local moraleModifier
+			local halfRange = self.range/2
+			if enemyDistance > halfRange then
+				moraleModifier = (1-(enemyDistance-halfRange)/halfRange)*1/2+1/2
+			else
+				moraleModifier = 1
+			end
+			if not enemyFacingUs then
+				moraleModifier = moraleModifier*2
+			end
+			if inRange then
+				--print(tostring(self.army) .. " Firing Volley")
+				local firingSquad = self.rows[1]
+				if self.formation == "Square" and self.inFormation == true then
+					local facingThem = {}
+					for i, Soldier in pairs(self.soldiers:GetChildren()) do
+						local forward = Soldier:FindFirstChild("GoToPart").CFrame.lookVector
+						local displacement = self.currentTarget.marker.Position - Soldier:FindFirstChild("GoToPart").Position -- (direction)
+						local amountForward = forward:Dot(displacement)
+						if amountForward >= 0 then
+							table.insert(facingThem, Soldier)
+						end
+					end
+					firingSquad = facingThem
+				end
+				if self.garrisonSpot and self.garrisonSpot.unit == getUnit(self.unit) then
+					firingSquad = self.soldiers:GetChildren()
+				end
+				for i, Soldier in pairs(firingSquad) do
+					if self.moving or not self.currentTarget.active then 	
+						self.VolleyCalculator:Fire(moraleModifier, self.currentTarget)
+						self.CaptainCommand:Fire("Return") 
+						return end
+					local SoldierDead = Soldier:FindFirstChild("Dead")
+					local Orders = Soldier:FindFirstChild("Orders")
+					local SoldierReloaded = Soldier:FindFirstChild("Reloaded")
+					if Orders then
+						Orders.Fire:Fire(self.currentTarget.unit)
+					end
+				end
+				self.VolleyCalculator:Fire(moraleModifier, self.currentTarget.unit)
+				--[[elseif self.formation == "Skirmish" and inRange then
+				local candidates = {unpack(self.soldiers:GetChildren())}
+				local numFired = 0
+				while #candidates > self.soldiers/ do
+					local Soldier = candidates[math.random(#candidates)]
+					if self.moving or not self.currentTarget.active then 	
+						self.CaptainCommand:Fire("Return") 
+						return end
+					local SoldierDead = Soldier:FindFirstChild("Dead")
+					local Orders = Soldier:FindFirstChild("Orders")
+					local SoldierReloaded = Soldier:FindFirstChild("Reloaded")
+					if Orders then
+						if SoldierReloaded and SoldierReloaded.Value == true then
+							--numFired+=1
+						end
+						Orders.Fire:Fire(self.currentTarget.unit)
+					end
+				end]]
+				--[[for i, Soldier in pairs(self.soldiers:GetChildren()) do
+					if numFired >=6 then break end
+					
+				end]]
+			end
+		end
+		local function waitStage()
+			for i = 1, 5, 1 do
+				wait(1)
+				if self.moving or self.currentTarget == nil or not self.currentTarget.active then self.CaptainCommand:Fire("Return") return end
+			end
+		end
+		self.firingSequence = {targetStage, fireStage, waitStage}
+		local function meleeRangeStage()
+			print("Melee Sequence 1 starting")
+			print("Making sure unit is in melee range of target")
+			local inRange = self:checkInRange(self.currentTarget, 50)
+			if not inRange then
+				self:getInRange(40)
+			end
+			print("Check complete")
+		end
+		local function attackStage()
+			MeleeEvent:Fire(self.unit, self.currentTarget.unit)
+			self:animateRegiment("MeleeReady")
+			local candidates = {unpack(self.soldiers:getChildren())}
+			while #candidates > 0 and self:checkInMelee() < 30 do
+				local Soldier = table.remove(candidates, 1)
+				local SoldierDead = Soldier:FindFirstChild("Dead")
+				local SoldierInDuel = Soldier:FindFirstChild("InDuel")
+				if Soldier and SoldierDead and SoldierInDuel and SoldierDead.Value == false and SoldierInDuel.Value == false then
+					local Orders = Soldier:FindFirstChild("Orders")
+					if Orders then
+						Orders.Attack:Fire(self.currentTarget.unit)
+					end
+				end
+			end
+
+		end
+		local function endMeleeStage()
+			if self.currentTarget~=nil then
+				if self.currentTarget.soldiers == nil then
+					print("Enemy unit gone")
+					self:abortMelee()
+					self.currentTarget = nil
+					self.CaptainCommand:Fire("Return")
+					return end
+			end
+			print(self.ID .. " has finished a round")
+		end
+		self.meleeSequence = {attackStage, waitStage, endMeleeStage}
+		self.baseRange = unitCard.Range.Value
+		self.range = self.baseRange
+		self.currentDrums = self.marker.MovingDrums:GetChildren()[math.random(#self.marker.MovingDrums:GetChildren())]
+		self.currentDrums:Play()
+		self.musketRange.Size = Vector3.new(self.range/110*0.4, self.range*2, self.range*2)
+		self.musketRange.Transparency = 1
+		self.meleeRange.Transparency = 1
+		self.soldiersAlive.Value = #self.soldiers:GetChildren()
+		self.label.UnitID.Text = self.owner.Value .. "'s " .. self.army.Nation.Value .. " "  .. self.unit.Name
+		self.profile.UnitID.Text = self.unit.Name
+		self.label.AliveTroops.Text = "Troops: " .. tostring(#self.soldiers:GetChildren()) .. "/" .. tostring(MaxTroops)
+		self.profile.AliveTroops.Text = "Troops: " .. tostring(#self.soldiers:GetChildren()) .. "/" .. tostring(MaxTroops)
+		self.label.CombatMode.Text = "Mode: Firing " .. self.currentMode
+		self.label.CurrentTarget.Text = "Targeting Nearest Unit"
+		local reloadTime = unitCard.ReloadTime.Value
+		local dispersion = 0.5-(unitCard.Accuracy.Value/200)
+		local drop = (100-unitCard.Drop.Value)/100
+		for i, Soldier in pairs(self.soldiers:GetChildren()) do
+			local Orders = Soldier:FindFirstChild("Orders")
+			local values = {reloadTime,dispersion,drop}
+			if Orders then
+				Orders.Setup:Fire("Infantry", values)
+			end
+		end
+		RowUpdate.OnServerEvent:Connect(function(player, Unit, Size)
+			if Unit == self.unit and not self.fighting and self.garrisonSpot == nil then
+				local NewRowLength
+				if Size == "Short" then
+					NewRowLength = self.maxTroops/3
+				elseif Size == "Medium" then
+					NewRowLength = self.maxTroops/2.5
+				else
+					NewRowLength = self.maxTroops/2
+				end
+				NewRowLength = math.ceil(NewRowLength)
+				self.rowLength = NewRowLength
+				self.unit.PrevRowLength.Value = NewRowLength
+				self.currentTarget = nil
+				self.moving = true
+				self:updateGrid()
+				self.goal.Transparency = 1
+				wait(2)
+				self:moveUnit()
+				wait(1)
+				self.unit.RowLength.Value = NewRowLength
+			end
+			return end)
+		AttackModeUpdate.OnServerEvent:Connect(function(player, Unit, Mode)
+			if Unit == self.unit then
+				if Mode == "Formation" then
+					if #self.formations > 1 then
+						self.inFormation = false
+						if self.formation == self.formations[1] then
+							self.formation = self.formations[2]
+						else
+							self.formation = self.formations[1]
+						end
+					end
+					if self.formation == "Line" then
+						self.disorder = 0.5
+						self.Spacing.Value = 4
+					elseif self.formation == "Skirmish" then
+						self.disorder = 2
+						self.Spacing.Value = 10
+					elseif self.formation == "Square" then
+						self.Spacing.Value = 3
+						self.disorder = 0.5						
+						self.goal.Position = meanVector(self.soldiers,0,0)
+						self.CaptainCommand:Fire("New Formation")
+					end
+					print("Formation is now " .. self.formation)
+					self:moveUnit()
+				elseif Mode == "AttackMode" then
+					self.designatedTarget = nil
+					self.currentTarget = nil
+					if not self.fighting then
+						self.fighting = true
+						self.label.CombatMode.Text = "Mode: Melee"
+						self.range = self.baseRange/2
+						self:updateGrid()
+						self.musketRange.BrickColor = BrickColor.new("Magenta")
+					elseif self.fighting then
+						self.fighting = false
+						self.label.CombatMode.Text = "Mode: Firing " .. self.currentMode
+						for i, Soldier in pairs(self.soldiers:GetChildren()) do
+							local Orders = Soldier:FindFirstChild("Orders")
+							if Orders then
+								Orders.EndDuel:Fire()
+							end
+						end
+						self.range = self.baseRange
+						self.musketRange.BrickColor = BrickColor.new("Bright red")
+					end
+					self.musketRange.Size = Vector3.new(1, self.range*2, self.range*2)
+				end
+			end		
+		end)
+		MeleeEvent.Event:Connect(function(sendUnit, recUnit, Event)
+			if recUnit == self.unit then
+				if self.behindWall or self.movingToWall then
+					self.movingToWall = false
+					self.behindWall = false
+				end
+				self:leaveGarrison()
+				if Event == "Charge" then
+					wait(3)
+					if self.moving then
+						self.goal.Position = (self.goal.CFrame*CFrame.new(self.Spacing.Value*self.rowLength,0,0)).p
+						if self.formation ~= "Square" then
+							self.goal.Position = Vector3.new(self.marker.Position.X, self.marker.Position.Y, self.marker.Position.Z)
+						end
+						snapToTerrain(self.goal)
+						self:moveUnit()
+						wait(3)
+					end
+				end
+				if self.fighting == false then
+					self.wasAttacked = true
+					self.fighting = true
+					self.label.CombatMode.Text = "Mode: Melee(Attacked)"
+					self.currentTarget = nil
+					--[[if self.targetConnection then
+						self.targetConnection:Disconnect()
+					end
+					self.currentTarget = getUnit(sendUnit)]]
+					--self.label.CurrentTarget.Text = "Current Target: " .. tostring(self.currentTarget.unit)
+					self:updateGrid()
+					table.insert(self.attackers, getUnit(sendUnit))
+					repeat 
+						local tempTable = {unpack(self.attackers)}
+						self.attackers = {}
+						while #tempTable > 0 do
+							local unit = table.remove(tempTable, 1)
+							if unit.currentTarget ~= nil then
+								if unit.currentTarget.unit == self.unit and unit.fighting == true then
+									table.insert(self.attackers, unit)
+								end
+							end
+						end
+						wait(1); --print("waiting to escape melee") 
+					until #self.attackers == 0
+					self.fighting = false
+					self.label.CombatMode.Text = "Mode: Firing " .. self.currentMode
+					self.wasAttacked = false
+					self.currentTarget = nil
+					self:updateGrid()
+					self:moveUnit()
+					print("Melee aborted")
+				end
+			end
+		end)
+		self.VolleyCalculator.Event:Connect(function(moraleModifier, target)
+			local unitFromTarget = getUnit(target)
+			local numFired = 0
+			wait(5)
+			for index, Soldier in pairs(self.soldiers:GetChildren()) do
+				local SoldierFired = Soldier:FindFirstChild("Fired")
+				if SoldierFired and SoldierFired.Value == true then
+					SoldierFired.Value = false
+					numFired +=1
+				end
+			end
+			--print(numFired)
+			self.sinceFired[9] = true
+			--print(moraleModifier)
+			--print((numFired/8)*1*moraleModifier)
+			unitFromTarget.MoraleHit:Fire((numFired/10)*moraleModifier, 7, 0, "Volley")
+		end)
+		self.CaptainCommand.Event:Connect(function(Caller)
+			if Caller == "New Captain" then
+				print("Yuwdadawd")
+				self:updateGrid()
+				self:moveUnit()
+			elseif Caller == "New Formation" then
+				print("Square Called")
+				wait(3)
+				self.inFormation = true
+				if self.formation == "Square" then
+					print("Square complete")
+					local lastCount = #self.soldiers:GetChildren()
+					while self.formation == "Square" and not self.moving and self.inFormation == true and self.designatedTarget == nil do
+						if #self.soldiers:GetChildren()<lastCount then
+							lastCount = #self.soldiers:GetChildren()
+							self:moveUnit()
+						end
+						wait(2)
+					end
+					self.formation = "Line"
+					self:moveUnit()
+					print("Exited Square")
+				end
+			elseif Caller ~= "New Captain" then
+				if Caller == "Captain" then
+					if not self.moving then return end
+				elseif Caller == "Return" then
+					self.commandOn = false
+					if self.moving then return end
+				end
+				if self:getMorale() == false or self.commandOn == true then return end
+				self.moving = false
+				self.commandOn = true
+				--print(self.ID .. " Stage 1")
+				wait(2.5)
+				if self.designatedTarget == nil then
+					self.label.CurrentTarget.Text = "Targeting Nearest Unit"
+				end
+				self:setCanFight(true)
+				self:enterGarrison()
+				targetStage()			
+				--print(self.ID .. " Stage 2")
+				rangeStage()
+				--print(self.ID .. " Stage 3")
+				if self.currentTarget then
+					if self.fighting and self:checkInRange(self.currentTarget, 40) and self.currentTarget.moving == false and self.currentTarget:getMorale() == true then
+						--print(self.ID .. " Stage 4.1")
+						self:animateRegiment("MeleeReady")
+						for i = 1, #self.meleeSequence, 1 do
+							self.meleeSequence[i]()
+							if self.moving or self.currentTarget == nil or self.currentTarget.moving then self.CaptainCommand:Fire("Return") return end
+						end
+					else
+						--print(self.ID .. " Stage 4.2")
+						self:animateRegiment("Shoulder")
+						self:animateFrontRow("Ready")
+						for i = 1, #self.firingSequence, 1 do
+							wait(1)
+							--print(print(self.ID .. " Stage 4.2" .. tostring(i)))
+							if self.currentTarget == nil or self.moving then --[[print("oh noes " .. self.ID)]] self.CaptainCommand:Fire("Return") return end
+							--print(self.ID .. " Stage 4.3" .. tostring(i))
+							self.firingSequence[i]()
+						end
+					end
+				end
+				--print(self.ID .. " Stage 5")
+				self:updateGrid()
+				self.commandOn = false
+				self.CaptainCommand:Fire("Return")			
+			end
+			return end)
+	end
+	--Cavalry Regiment
+	Cavalry = {}
+	Cavalry.__index = Cavalry
+	setmetatable(Cavalry, Regiment)
+	function Cavalry.new(object)
+		local newCavalry = Regiment.new(object)
+		--newCavalry.chargeRange = object.ChargeRange
+		newCavalry.chargeAtWill = false
+		newCavalry.canCharge = true
+		newCavalry.baseSpeed = 24
+		newCavalry.chargeStat = 0
+		newCavalry.charging = false
+		newCavalry.ChargeEnd = object.ChargeEnd
+		newCavalry.canEndCharge = false
+		newCavalry.meleeSequence = {}
+		newCavalry.ogPosition = nil
+		setmetatable(newCavalry, Cavalry)
+		return newCavalry
+	end
+	function Cavalry:uniqueModifier()
+		return 0
+	end
+	function Cavalry:getTarget()
+		print("looking for target")
+		if self.designatedTarget and self.currentTarget ~= nil then
+			return self.designatedTarget
+		elseif self.currentTarget ~= nil then
+			print("Current target is " .. tostring(self.currentTarget.unit))
+			local enemies = self.currentTarget.soldiers
+			local closestDistance = self.range
+			local unitInRange = self:checkInRange(self.currentTarget, 1000)
+			if enemies ~= nil and #enemies:GetChildren() > 0 and unitInRange and self.currentTarget.active == true and self.currentTarget.visible == true then
+				print("found previous target")
+				return end
+			print("Couldn't find target or target out of range")
+			self.currentTarget = nil
+		end
+		if self.currentTarget == nil then
+			local CollectionService = game:GetService("CollectionService")
+			local closestDistance = 1001
+			local closestUnit
+			for i, enemyUnit in pairs(GameUnits) do
+				if enemyUnit.army ~= self.army and self.currentTarget == nil and enemyUnit.active == true and enemyUnit.visible == true then
+					RunService.Heartbeat:Wait()
+					local unitInRange
+					local unitDistance
+					unitInRange, unitDistance = self:checkInRange(enemyUnit, 1000)
+					if unitDistance < closestDistance then
+						closestUnit = enemyUnit
+						closestDistance = unitDistance
+					end
+				end
+			end
+			if closestUnit then
+				local forward = self.marker.CFrame.lookVector
+				local displacement = closestUnit.marker.Position - self.marker.Position -- (direction)
+				local amountForward = forward:Dot(displacement)
+				if amountForward >= 0 then
+					print("Now targeting: " .. tostring(closestUnit.unit.Parent) .. ", " .. tostring(closestUnit.unit))
+					self.currentTarget = closestUnit
+					--[[if amountForward < 5 and self.fighting == false then
+						self.goal.CFrame = CFrame.new(self.goal.Position, closestUnit.goal.Position)
+						self:moveUnit()
+					end]]--
+				end
+			end
+			if self.currentTarget ~= nil then
+				self:updateSound()
+			end
+		end
+	end
+	function Cavalry:charge()
+		if self.designatedTarget then
+			print("Charging")
+			--local originalPosition = GoToPart.Position
+			self.inGameGui.ChargeStrength.Visible = true
+			self:setCanFight(true)
+			self.canEndCharge = true
+			self.charging = true
+			self.moving = true
+			local candidates = self.maxTroops
+			for i, Soldier in pairs(self.soldiers:GetChildren()) do
+				local Orders = Soldier:FindFirstChild("Orders")
+				if Orders then
+					if candidates > 0 then
+						Orders.Charge:Fire("Start",true,self.designatedTarget.soldiers)
+						candidates-=1
+					else
+						Orders.Charge:Fire("Start",false,self.designatedTarget.soldiers)
+					end
+				end
+			end
+			local posDifference = self.marker.CFrame.p-meanVector(self.currentTarget.soldiers,0, 5)
+			self.ogPosition = self.marker.CFrame.p
+			local Distance = posDifference.Magnitude
+			local currentGoal = self.currentTarget.goal.Position
+			print(currentGoal)
+			local ogPoint = self.goal.Position
+			local intPoint = self:intercept(self.currentTarget)
+			self.goal.CFrame = CFrame.new(ogPoint, intPoint)
+			--self.goal.Orientation = Vector3.new(0, self.goal.Orientation.Y, 0)
+			self.goal.Position = intPoint
+			self.goal.CFrame = self.goal.CFrame*CFrame.new(0, 0, -20)
+			self:moveUnit()
+			--local reset = 0
+			local inRange = false
+			inRange = self:checkInRange(self.currentTarget, 40)
+			self.charging = true
+			--print("charging now")
+			--[[while not inRange and self.currentTarget~= nil and self.designatedTarget ~= nil and self.charging do
+				wait(0.1) 
+				inRange = self:checkInRange(self.currentTarget, 40)
+				Distance = (self.marker.Position-self.currentTarget.marker.Position).Magnitude
+				local goalCheck = self.currentTarget.goal.Position
+				local goalDiff = (goalCheck-currentGoal).Magnitude
+				--reset += 0.25
+				if self.currentTarget ~= nil then
+					if goalDiff > 7 then
+						print("Target changed course or reset, calculating...")
+						currentGoal = self.currentTarget.goal.Position
+						intPoint = self:intercept(self.currentTarget)
+						self.goal.CFrame = CFrame.new(ogPoint, intPoint)
+						--self.goal.Orientation = Vector3.new(0, self.goal.Orientation.Y, 0)
+						self.goal.Position = intPoint
+						self.goal.CFrame = self.goal.CFrame*CFrame.new(0, 0, -20)
+						self:moveUnit()
+					end
+				end
+				--print(Distance)
+			end]]
+			while not inRange and self.currentTarget~= nil and self.designatedTarget ~= nil and self.charging do
+				wait(1) 
+				if self.currentTarget and self.currentTarget.garrisonSpot and self.currentTarget.garrisonSpot.unit == self.currentTarget then print("Walaladlwa") return end
+				print("checking target's movement")
+				inRange = self:checkInRange(self.currentTarget, 40)
+				Distance = (self.marker.Position-self.currentTarget.marker.Position).Magnitude
+				local goalCheck = self.currentTarget.goal.Position
+				local goalDiff = (goalCheck-currentGoal).Magnitude
+				local value = getFlatMagnitude(self.ogPosition, self.marker.CFrame.p)
+				if value > 200 then
+					value = 200
+				end
+				self.inGameGui.ChargeStrength.Value.Value = value/200
+				--reset += 0.25
+				if self.currentTarget ~= nil and self.currentTarget.moving==true then
+					--if goalDiff > 7 --[[or reset >= 7]] then
+					print("Target is moving, adjusting...")
+					self.goal.CFrame = CFrame.new(self.marker.Position, self.currentTarget.marker.Position)
+					self.goal.Orientation = Vector3.new(0, self.goal.Orientation.Y, 0)
+					local tempCFrame = CFrame.new(self.currentTarget.marker.Position,self.currentTarget.goal.Position)
+					tempCFrame = tempCFrame*CFrame.new(0,0,-20)
+					self.goal.Position = tempCFrame.p
+					self.goal.CFrame = self.goal.CFrame*CFrame.new(0,0,-2)
+					self:moveUnit()
+					--end
+				end
+				--print(Distance)
+			end
+			
+			if self.designatedTarget == nil then
+				for i, Soldier in pairs(self.soldiers:GetChildren()) do
+					local Orders = Soldier:FindFirstChild("Orders")
+					if Orders then
+						Orders.Charge:Fire("Break")
+					end
+				end
+				return end
+			--[[self.goal.CFrame = self.marker.CFrame
+			snapToTerrain(self.goal)
+			self:updateGrid()
+			self:moveUnit()]]--
+			local finalPosition = self.captain:FindFirstChild("HumanoidRootPart").Position
+			--local distanceModifier = 200-(originalPosition - finalPosition).Magnitude
+			--local meleeModifier = self.meleeStat.Value/currentTarget:FindFirstChild("MeleeStat").Value
+			--local totalModifier = distanceModifier*meleeModifier
+			--print("Total modifier is " .. tostring(totalModifier))
+			for i, Soldier in pairs(self.soldiers:GetChildren()) do
+				local Orders = Soldier:FindFirstChild("Orders")
+				if Orders then
+					Orders.Charge:Fire("End",nil,self.designatedTarget.soldiers)
+				end
+			end
+			local chargeStrength = 0
+			local distanceModifier = 1
+			local chargeDistance = getFlatMagnitude(self.ogPosition, self.marker.CFrame.p)
+			if chargeDistance < 200 then
+				distanceModifier = 0.5 + (chargeDistance/200)
+			else
+				distanceModifier = 1.5
+			end
+			print(distanceModifier)
+			if self.currentTarget.musketRange then
+				if isForward(self.currentTarget.goal, self.marker, 1) == false then
+					chargeStrength +=1
+				end
+				if self.currentTarget.moving then
+					chargeStrength +=1
+				end
+				if self.currentTarget.formation == "Skirmish" then
+					chargeStrength +=1
+				end
+				if self.currentTarget.moving == false then
+					if self.currentTarget.fighting == true then
+						chargeStrength -=1
+					end
+				end
+			end
+			chargeStrength = chargeStrength*distanceModifier
+			if self.currentTarget.formation == "Sqaure" and self.currentTarget.inFormation then
+				chargeStrength = -2
+			end
+			if #self.soldiers:getChildren()<self.maxTroops/2 then
+				self.currentTarget.MoraleHit:Fire((#self.soldiers:getChildren()/self.maxTroops)*2+chargeStrength, 7, 3, "Charge")
+			else
+				self.currentTarget.MoraleHit:Fire(2+chargeStrength, 7, 3, "Charge")
+			end
+			MeleeEvent:Fire(self.unit, self.currentTarget.unit, "Charge")
+			wait(4)
+			self.inGameGui.ChargeStrength.Value.Value = 0
+			self.inGameGui.ChargeStrength.Visible = false
+			print("Still in the charge")
+			self.designatedTarget = nil
+			self.charging = false
+		end
+	end
+	function Cavalry:uniqueTarget()
+		self.moving = true
+		self:charge()
+	end
+	function Cavalry:abortMelee()
+		if self.wasAttacked then
+			self.fighting = false
+			self.label.CombatMode.Text = "Mode: Firing " .. self.currentMode
+			self.wasAttacked = false
+		end
+	end
+	function Cavalry:UniqueSetup()
+		wait(0.1)
+		self.fighting = true
+		local MaxTroops = #self.soldiers:GetChildren()
+		if self.playerOwner then
+			local playerGui = self.playerOwner.PlayerGui
+			if playerGui ~= nil then
+				self.label.Parent = playerGui:FindFirstChild("UnitsGui")
+				self.label:FindFirstChildOfClass("LocalScript").Disabled = false
+				self.label.Visible = false
+				local armyBar = playerGui:FindFirstChild("BottomBar"):FindFirstChild(tostring(self.army))
+				if armyBar ~= nil then
+					self.profile.Parent = armyBar
+					self.profile:FindFirstChildOfClass("LocalScript").Disabled = false
+					self.profile.Regiment.Value = tostring(self.unit)
+					armyBar.Visible = true
+					local currentProfiles = 0
+					self.profile.Position = UDim2.new(0.1*self.index-0.1, 0, 0, 0)
+				end
+			else
+				print("couldnt find gui")
+			end
+		end
+		local unitCard = ReplicatedStorage.UnitCards:FindFirstChild(self.unit.UnitType.Value)
+		self.chargeStat = unitCard.Charge.Value
+		for i, Soldier in pairs(self.soldiers:GetChildren()) do
+			local Orders = Soldier:FindFirstChild("Orders")
+			local values = {self.chargeStat, self.baseSpeed}
+			if Orders then
+				Orders.Setup:Fire("Cavalry", values)
+			end
+		end
+		local function targetStage()
+			repeat
+				wait(1)
+				self:getTarget()
+			until self.currentTarget ~= nil or self.moving or self.designatedTarget ~= nil
+		end
+		local function meleeRangeStage()
+			print("Melee Sequence 1 starting")
+			print("Making sure unit is in melee range of target")
+			local inRange = self:checkInRange(self.currentTarget, 40)
+			if not inRange then
+				self:getInRange(40)
+			end
+			print("Check complete")
+		end
+		local function attackStage()
+			MeleeEvent:Fire(self.unit, self.currentTarget.unit)
+			self:animateRegiment("MeleeReady")
+			local candidates = {unpack(self.soldiers:getChildren())}
+			while #candidates > 0 and self:checkInMelee() < 30 do
+				local Soldier = table.remove(candidates, 1)
+				local SoldierDead = Soldier:FindFirstChild("Dead")
+				local SoldierInDuel = Soldier:FindFirstChild("InDuel")
+				if Soldier and SoldierDead and SoldierInDuel and SoldierDead.Value == false and SoldierInDuel.Value == false then
+					local Orders = Soldier:FindFirstChild("Orders")
+					if Orders then
+						Orders.Attack:Fire(self.currentTarget.unit)
+					end
+				end
+			end
+			--[[for i, Soldier in pairs(self.frontRow) do
+				local SoldierDead = Soldier:FindFirstChild("Dead")
+				local SoldierInDuel = Soldier:FindFirstChild("InDuel")
+				if Soldier and SoldierDead and SoldierInDuel and SoldierDead.Value == false and SoldierInDuel.Value == false then
+					local Order = Soldier:FindFirstChild("Order")
+					if Order then
+						SoldierInDuel.Value = true
+						Order:Fire("Attack", self.currentTarget.unit)
+					end
+				end
+			end]]--
+		end
+		local function endMeleeStage()
+			if self.currentTarget~=nil then
+				if self.currentTarget.soldiers == nil then
+					print("Enemy unit gone")
+					self:abortMelee()
+					self.currentTarget = nil
+					self.CaptainCommand:Fire("Return")
+					return end
+			end
+			print(self.ID .. " has finished a round")
+		end
+		local function waitStage()
+			for i = 1, 5, 1 do
+				wait(1)
+				if self.moving or not self.currentTarget.active then self.CaptainCommand:Fire("Return") return end
+			end
+		end
+		self.meleeSequence = {attackStage, waitStage, endMeleeStage}
+		self.rowLength = self.rowLength/2
+		self.unit.PrevRowLength.Value = self.rowLength/2
+		self.unit.RowLength.Value = self.rowLength/2
+		self.currentDrums = self.marker.MovingDrums:GetChildren()[math.random(#self.marker.MovingDrums:GetChildren())]
+		self.currentDrums:Play()
+		--self.chargeRange.Transparency = 1
+		self.meleeRange.Transparency = 1
+		self.soldiersAlive.Value = #self.soldiers:GetChildren()
+		self.label.UnitID.Text = self.owner.Value .. "'s " .. self.army.Nation.Value .. " "  .. self.unit.Name
+		self.profile.UnitID.Text = self.unit.Name
+		self.label.AliveTroops.Text = "Troops: " .. tostring(#self.soldiers:GetChildren()) .. "/" .. tostring(MaxTroops)
+		self.profile.AliveTroops.Text = "Troops: " .. tostring(#self.soldiers:GetChildren()) .. "/" .. tostring(MaxTroops)
+		self.label.CombatMode.Text = "Mode: Holding Charge"
+		self.label.CurrentTarget.Text = "Current Target: No one"
+		--self.label.Charge.Text = "Charge Ready"
+		UnitMover.OnServerEvent:Connect(function()
+			for i, rider in pairs(self.soldiers:GetChildren()) do
+				local Orders = rider:FindFirstChild("Orders")
+				if Orders then
+					Orders.Charge:Fire("Break")
+				end
+				rider:FindFirstChild("Humanoid").WalkSpeed = self.baseSpeed
+				rider:FindFirstChild("CurrentAnim").Value = "ChargeEnd"
+			end
+			return end)
+		RowUpdate.OnServerEvent:Connect(function(player, Unit, Size)
+			if Unit == self.unit then
+				local NewRowLength
+				if Size == "Short" then
+					NewRowLength = self.maxTroops/3
+				elseif Size == "Medium" then
+					NewRowLength = self.maxTroops/2.5
+				else
+					NewRowLength = self.maxTroops/2
+				end
+				NewRowLength = math.ceil(NewRowLength)
+				self.rowLength = NewRowLength
+				self.unit.PrevRowLength.Value = NewRowLength
+				self:updateGrid()
+				self.goal.Transparency = 1
+				self:moveUnit()
+				wait(1)
+				self.unit.RowLength.Value = NewRowLength
+			end
+			return end)
+		AttackModeUpdate.OnServerEvent:Connect(function(player, Unit, Mode)
+			if Unit == self.unit then
+				if Mode == "AttackMode" then
+					if self.chargeAtWill then
+						self.chargeAtWill = false
+						self.label.CombatMode.Text = "Mode: Holding Charge"
+					else
+						self.chargeAtWill = true
+						self.label.CombatMode.Text = "Mode: Charging At Will"
+					end
+				end
+			end		
+			return end)
+		MeleeEvent.Event:Connect(function(sendUnit, recUnit, Event)
+			if recUnit == self then
+			end
+			return end)
+		self.CaptainCommand.Event:Connect(function(Caller)
+			if Caller ~= "New Captain" then
+				if Caller == "Captain" then
+					if not self.moving then return end
+				elseif Caller == "Return" then
+					if self.moving then return end
+				end
+				while self.charging do
+					wait(0.5)
+				end
+				print(self.ID .. " Stage 1")
+				self.moving = false
+				self:setCanFight(true)
+				wait(2.5)
+				print(self.ID .. " Stage 2")
+				targetStage()
+				print(self.ID .. " Stage 3")
+				if self.currentTarget and self:checkInRange(self.currentTarget, 50) and self.currentTarget.moving == false and self.currentTarget:getMorale() == true then
+					print("ready")
+					self:animateRegiment("MeleeReady")
+					for i = 1, #self.meleeSequence, 1 do
+						self.meleeSequence[i]()
+						if self.moving or self.currentTarget == nil or self.currentTarget.moving then self.CaptainCommand:Fire("Return") return end
+					end
+				end
+				self:updateGrid()
+				self:moveUnit()
+				self.CaptainCommand:Fire("Return")
+			elseif Caller == "New Captain" then
+				self:updateGrid()
+				--self:moveUnit()
+			end
+			return end)
+		self.ChargeEnd.Event:Connect(function(chargedRegi, chargeStrength)
+			if not self.canEndCharge then return end
+			print("Charge ended early")
+			local chargedUnit = getUnit(chargedRegi)
+			if #self.soldiers:getChildren()<self.maxTroops/2 then
+				chargedUnit.MoraleHit:Fire((#self.soldiers:getChildren()/self.maxTroops)*2+chargeStrength, 7, 1, "Charge")
+			else
+				chargedUnit.MoraleHit:Fire(2+chargeStrength, 7, 1, "Charge")
+			end
+			MeleeEvent:Fire(self.unit, chargedUnit.unit, "Charge")
+			self.canEndCharge = false
+			self.designatedTarget = nil
+			self.goal.Position = self.marker.Position
+			self.goal.CFrame = self.goal.CFrame*CFrame.new(0,0,-30)
+			snapToTerrain(self.goal)
+			self:moveUnit()
+			wait(3)
+			self.goal.Position = self.marker.Position
+			self.charging = false
+			--self.goal.CFrame = self.goal.CFrame*CFrame.new(0,0,-10)
+			self.currentTarget = nil
+			--self.goal.CFrame = self.marker.CFrame
+			--self:moveUnit()
+			return end)
+	end
+end
+CreateClasses()
+--Player related functions
+workspace.GameObjects.Projectiles.ChildAdded:Connect(function(shot)
+	local Shot = shot
+	local chance = Shot.Chance
+	local Players = game:GetService("Players")
+	local CollectionService = game:GetService("CollectionService")
+	local originUnit = game.Workspace.GameObjects:FindFirstChild(shot.Team.Value):FindFirstChild(shot.Unit.Value)
+	local shotConnection
+	
+	shotConnection = Shot.Touched:Connect(function(hit)
+		if not Players:GetPlayerFromCharacter(hit.Parent) and not Players:GetPlayerFromCharacter(hit.Parent.Parent) then
+			local target
+			local deathChance = chance.Value
+			if hit == workspace.Terrain then
+				Shot:Destroy()
+				shotConnection:Disconnect()
+				--elseif CollectionService:HasTag(hit, "Wall") then
+			elseif hit.CanCollide == true and hit.Name ~= "HumanoidRootPart" then
+				print("hit a collidable object")
+				Shot:Destroy()
+				shotConnection:Disconnect()
+			elseif hit.Name == "HumanoidRootPart" then
+				local Soldier = hit.Parent
+				if Soldier.Parent.Parent.Parent.Name ~= Shot.Name then
+					--print("Body shot")
+					target = Soldier
+					--local damageValues = {50,50,50,100,200}
+				end
+			elseif hit.Name == "Head" then
+				local Soldier = hit.Parent
+				if Soldier.Parent.Parent.Parent.Name ~= Shot.Name then
+					print("Head shot!")
+					--local damageValues = {50,100,200}
+					deathChance+=0.25
+					target = Soldier
+				end
+			elseif hit.Name == "Legs" then
+				local Soldier = hit.Parent
+				if Soldier.Parent.Parent.Parent.Name ~= Shot.Name then
+					--print("Leg shot")
+					--local damageValues = {50}
+					deathChance-=0.4
+					target = Soldier
+				end
+			elseif hit.Name == "Body" then
+				local Soldier = hit.Parent
+				if Soldier.Parent.Parent.Parent.Name ~= Shot.Name then
+					--print("Horse body shot")
+					--local damageValues = {50,100}
+					deathChance-=0.3
+					target = Soldier
+				end
+			elseif hit.Name == "HorseHead" then
+				local Soldier = hit.Parent
+				if Soldier.Parent.Parent.Parent.Name ~= Shot.Name then
+					--print("Horse head shot")
+					--local damageValues = {100}
+					deathChance-=0.2
+					target = Soldier
+				end
+			end
+			if target then
+				--print("hit")
+				local damage
+				local targetUnit = getUnit(target.Parent.Parent)
+				local secondChance = 0
+				if targetUnit then
+					if targetUnit.formation == "Skirmish" then
+						--print("wow")
+						secondChance = 0.35
+					end
+				end
+				if math.random() > deathChance and math.random() > secondChance then
+					damage = 50
+				else
+					damage = 100*math.random(1,2)
+				end
+				if target.Humanoid.Health > 0 and target.Humanoid.Health - damage <= 0 then
+					CountKill:Fire(originUnit)
+				end
+				target.Humanoid:TakeDamage(damage)
+				Shot:Destroy()
+				shotConnection:Disconnect()
+			end
+		end
+	end)
+	wait(3)
+	Shot:Destroy()
+end)
+
+Players.PlayerAdded:Connect(function(player)
+	print("new player")
+	player.CharacterAdded:Connect(function()
+		--print("player character")
+		player.CharacterAppearanceLoaded:Connect(function()
+			for i, v in pairs(player.Character:GetChildren()) do
+				if v:IsA("BasePart") then
+					--print("parts fixed")
+					PhysicsService:SetPartCollisionGroup(v, playersCollisionGroupName)
+				end
+			end
+		end)
+	end)
+	return end)
+local function setCharacter(object)
+	if object:IsA("BasePart") and object.Transparency < 0.5 then
+		PhysicsService:SetPartCollisionGroup(object, playersCollisionGroupName)
+		object.Transparency = 0.5
+	--[[elseif object:IsA("BasePart") and object.Transparency < 0.5 then
+		local handle = object:FindFirstChild("Handle")
+		PhysicsService:SetPartCollisionGroup(handle, playersCollisionGroupName)
+		handle.Transparency = 0.5]]
+	end
+end
+local function onCharacterAdded(character)
+	-- Wait a brief moment before removing accessories to avoid the
+	-- "Something unexpectedly set ___ parent to NULL" warning
+	RunService.Stepped:wait()
+	-- Check for any existing accessories in the player's character
+	for _, child in pairs(character:GetChildren()) do
+		setCharacter(child)
+	end
+	-- Hats may be added to the character a moment after
+	-- CharacterAdded fires, so we listen for those using ChildAdded
+	character.ChildAdded:Connect(setCharacter)
+end
+local function onPlayerAdded(player)
+	-- Listen for spawns
+	player.CharacterAdded:Connect(onCharacterAdded)
+end
+Players.PlayerAdded:Connect(onPlayerAdded)
+--Start Game Events
+--borders
+for i, border in pairs(Borders:GetChildren()) do
+	RunService.Heartbeat:Wait()
+	PhysicsService:SetPartCollisionGroup(border, bordersCollisionGroupName)
+	EndSetupEvents.Event:Connect(function()
+		while gameInProgress do
+			wait(1)
+			for i, regiment in pairs(GameUnits) do
+				if regiment:getMorale() == false then
+					for i, Soldier in pairs(regiment.soldiers:GetChildren()) do
+						local soldierRoot = Soldier:FindFirstChild("HumanoidRootPart")
+						if soldierRoot and isForward(border,soldierRoot,1) and border.Name ~= "Top" then
+							regiment.marker:Destroy()
+							regiment.unit:FindFirstChild("CaptainMarker"):Destroy()
+							print(regiment.ID .. " has left the game!!!")
+							regiment:rout()
+						end
+					end
+				end
+			end
+		end
+	end)
+end
+for i, garrison in pairs(CollectionService:GetTagged("GarrisonSpot")) do
+	print(garrison)
+	local GarrisonSpot = Garrison.new(garrison)
+	table.insert(Garrisons, GarrisonSpot)
+	GarrisonSpot.soldierSpots = {}
+	print(GarrisonSpot.waitArea)
+	
+	for i, floor in pairs(garrison:GetChildren()) do
+		if floor:IsA("Folder") then
+			for i, v in pairs(floor:GetChildren()) do
+				table.insert(GarrisonSpot.soldierSpots, v)
+			end
+		end
+	end
+	for i, part in pairs(garrison:FindFirstChildOfClass("Model"):GetDescendants()) do
+		if part:IsA("Part") then
+			PhysicsService:SetPartCollisionGroup(part, wallCollisionGroupName)
+		end
+	end
+end
+for i, wall in pairs(CollectionService:GetTagged("Wall")) do
+	PhysicsService:SetPartCollisionGroup(wall, wallCollisionGroupName)
+	local WholeWall = Wall.new(wall)
+	table.insert(Walls,WholeWall)
+	print(WholeWall.wall)
+	WholeWall.wallSpots = {}
+	WholeWall.wallPositions = {}
+	for i=1,2,1 do
+		local wallSpot = wall:Clone()
+		local wallPos = wall:Clone()
+		wallSpot.Name = "WallSpot"
+		wallSpot.Transparency = 1
+		wallSpot.CanCollide = false
+		wallSpot.CanTouch = false
+		wallSpot.Parent = workspace.GameObjects
+		
+		CollectionService:RemoveTag(wallSpot,"Wall")
+		CollectionService:AddTag(wallSpot, "WallSpot")
+		wallSpot.Size = Vector3.new(wallSpot.Size.X,wallSpot.Size.Y,wallSpot.Size.Z*4)
+		wallPos.Name = "WallPos"
+		wallPos.Transparency = 1
+		wallPos.CanCollide = false
+		wallPos.CanTouch = false
+		wallPos.Parent = workspace.GameObjects
+		CollectionService:RemoveTag(wallPos,"Wall")
+		CollectionService:AddTag(wallPos, "WallPosition")
+		if i==1 then
+			wallSpot.CFrame = wall.CFrame*CFrame.new(0,0,wall.Size.Z*2)
+			wallPos.CFrame = wall.CFrame*CFrame.new(0,0,wall.Size.Z)
+		else
+			wallSpot.CFrame = wall.CFrame*CFrame.new(0,0,-wall.Size.Z*2)*CFrame.Angles(0,math.rad(180),0)
+			wallPos.CFrame = wall.CFrame*CFrame.new(0,0,-wall.Size.Z)*CFrame.Angles(0,math.rad(180),0)
+		end
+		table.insert(WholeWall.wallSpots,wallSpot)
+		table.insert(WholeWall.wallPositions,wallPos)
+	end
+	
+	
+end
+--visibility
+CountKill.Event:Connect(function(unit)
+	getUnit(unit):findCard().Kills.Value += 1
+end)
+StartGame.Event:Connect(function()
+	print("visibility working")
+	while not gameInProgress do
+		wait(1)
+	end
+	while gameInProgress do
+		wait(1)
+		for i, unit in pairs(GameUnits) do
+			for i = 1, 8, 1 do
+				unit.sinceFired[i] = unit.sinceFired[i+1]
+			end
+			unit.sinceFired[9] = false
+			local firedRecently = false
+			for i, v in pairs(unit.sinceFired) do
+				if v == true then
+					firedRecently = true
+					break
+				end
+			end
+			--local modifier = 0
+			if unit.moving == true or firedRecently then
+				unit.currentStealth = 0
+			else
+				--local inSoldiers = 0
+				local rayStart = unit.marker.Position
+				local raycastResult = workspace:Raycast(rayStart, Vector3.new(0, -100, 0), visibilityChecker)
+				--print("firing ray")
+				if raycastResult then
+					--op[print(raycastResult)
+					local item = raycastResult.Instance
+					if unit.stealthStat >= item.Value.Value then
+						unit.currentStealth = 6.5 - item.Value.Value + unit.stealthStat
+					end
+				end
+				--[[for i, item in pairs(CollectionService:GetTagged("VisibilityModifier")) do
+					for i, soldier in pairs(unit.soldiers:GetChildren()) do
+						local soldierRoot = soldier:FindFirstChild("HumanoidRootPart")
+						if soldierRoot and (soldierRoot.CFrame.p-item.Base.CFrame.p).Magnitude <= item.Area.Size.Z/2 then
+							--print(item)
+							--print(item.Area.Size.Z/2)
+							--print((soldierRoot.CFrame.p-item.Base.CFrame.p).Magnitude)
+							inSoldiers+=1
+							if inSoldiers >=3 then break end
+						end
+					end
+					if inSoldiers>=3 then
+						--print("Unit is hiding")
+						if unit.stealthStat >= item.Value.Value then
+							unit.currentStealth = 6.5 - item.Value.Value + unit.stealthStat
+						end
+						break
+					end
+				end]]
+			end
+			--print(unit.ID)
+			--print(modifier)
+			--unit.currentStealth = 5
+		end
+	end
+end)
+--Units and Soldiers Setup
+DuelResult.Event:Connect(function(winner,loser,damage)
+	getUnit(winner).recentDuelPoints += damage
+	getUnit(loser).recentDuelPoints -= damage
+end)
+SoldierCheck.OnInvoke = function(unit, value)
+	local gameUnit = getUnit(unit)
+	if gameUnit then
+		if value == "Moving" then
+			return gameUnit.moving
+		elseif value == "Morale" then
+			return gameUnit:getMorale()
+		end
+	end
+	return false
+end
+ChargeCheck.OnInvoke = function(soldier, myUnitRef, enemyUnitRef)
+	local enemyUnit = getUnit(enemyUnitRef)
+	local myUnit = getUnit(myUnitRef)
+	if enemyUnit and myUnit then
+		local values = {}
+		local chargeStrength = 0
+		if enemyUnit.musketRange then
+			chargeStrength = 0
+			local distanceModifier = 1
+			local chargeDistance = getFlatMagnitude(myUnit.ogPosition, myUnit.marker.CFrame.p)
+			if chargeDistance < 200 then
+				distanceModifier = 0.5 + (chargeDistance/200)
+			else
+				distanceModifier = 1.5
+			end
+			if isForward(enemyUnit.goal, soldier:FindFirstChild("HumanoidRootPart"), 1) == false then
+				chargeStrength +=1
+			end
+			if enemyUnit.moving then
+				chargeStrength +=1
+			end
+			if enemyUnit.formation == "Skirmish" then
+				chargeStrength +=1
+			end
+			if enemyUnit.moving == false then
+				if enemyUnit.fighting == true then
+					chargeStrength -=1
+				end
+			end
+			chargeStrength = chargeStrength*distanceModifier
+			if enemyUnit.formation == "Sqaure" and enemyUnit.inFormation then
+				chargeStrength = -2
+			end
+			values = {"Infantry", chargeStrength}
+		else
+			values = {"Cavalry", enemyUnit.chargeStat}
+		end
+		if myUnit.charging then
+			if myUnit.designatedTarget ~= nil then
+				if enemyUnit == myUnit.designatedTarget then
+					myUnit.canEndCharge = false
+				else
+					myUnit.ChargeEnd:Fire(enemyUnit.unit, chargeStrength)
+				end
+			end
+		end
+		return values
+	end
+end
+--setup stuff
+StartGame.Event:Connect(function()
+	local Armies = {}
+	for i, v in pairs(CollectionService:GetTagged("StartMarker")) do
+		for i, item in pairs(v:GetChildren()) do
+			item.Transparency = 1
+		end
+	end
+	--[[for i, v in pairs(workspace:GetChildren()) do
+		if v:IsA("Folder") and CollectionService:HasTag(v, "Army") then
+			table.insert(Armies, v)
+		end
+	end]]
+	for i, army in pairs(CollectionService:GetTagged("Army")) do
+		if army then
+			for i, v in pairs(army:GetDescendants()) do
+				if v:IsA("Humanoid") then
+					army.UnitsAlive.Value = army.UnitsAlive.Value + 1
+				end
+			end
+			local Regiments = {}
+			for i, thing in pairs(army:GetChildren()) do
+				if thing:IsA("Folder") then
+					table.insert(Regiments, thing)
+				end
+			end
+			for i, regiment in pairs(Regiments) do
+				regiment.Index.Value = i
+				regiment.Name = "Regiment " .. tostring(i) .. ", " .. regiment:FindFirstChild("UnitType").Value
+				local unitGui = regiment:FindFirstChild("Frame")
+				local unitFlag = regiment:FindFirstChild("UnitMarker"):FindFirstChild("GuiHolder"):FindFirstChild("BillboardGui")
+				if unitGui and unitFlag then
+					if army.Nation.Value == "Prussian" then
+						unitGui:FindFirstChild("UnitID").BackgroundColor3 = Color3.fromRGB(0,0,80)
+						if unitFlag ~= nil then
+							unitFlag:FindFirstChild("Prussian").Visible = true
+						end
+					elseif army.Nation.Value == "British" then
+						unitGui:FindFirstChild("UnitID").BackgroundColor3 = Color3.fromRGB(200,0,0)
+						if unitFlag ~= nil then
+							unitFlag:FindFirstChild("British").Visible = true
+						end
+					elseif army.Nation.Value == "French" then
+						unitGui:FindFirstChild("UnitID").BackgroundColor3 = Color3.fromRGB(230, 230, 230)
+						if unitFlag ~= nil then
+							unitFlag:FindFirstChild("French").Visible = true
+						end
+					end
+					unitFlag:FindFirstChild("Index").Text = tostring(regiment.Index.Value)
+				end
+				for i, v in pairs(regiment:GetDescendants()) do
+					if v:IsA("Script") then
+						v.Disabled = false
+					end
+				end
+			end
+		end
+	end
+	for _, Soldier in pairs(CollectionService:GetTagged("SoldierR6")) do
+		local soldierArmy = Soldier.Parent.Parent.Parent
+		if soldierArmy and Soldier:FindFirstAncestor("Workspace") then
+			--local uniform = game.ReplicatedStorage.Uniforms[soldierArmy:FindFirstChild("Nation").Value][Soldier.Parent.Parent:FindFirstChild("UnitType").Value]
+			local uniform = ReplicatedStorage.UnitCards[Soldier.Parent.Parent:FindFirstChild("UnitType").Value].Uniforms[soldierArmy:FindFirstChild("Nation").Value]
+			--local uniform = ReplicatedStorage.UnitCards["Infantry"].Uniforms["Prussian"]
+			Soldier:FindFirstChild("HumanoidRootPart").BrickColor = uniform:FindFirstChildOfClass("Part").BrickColor
+			if uniform ~= nil then
+				for i, item in pairs(uniform:GetChildren()) do
+					if item:IsA("Shirt") or item:IsA("Pants") then
+						local newItem = item:Clone()
+						newItem.Parent = Soldier
+					end
+				end
+			else print("Something happened") end
+			for i, v in pairs(Soldier:GetChildren()) do
+				if v:IsA("BasePart") or v:IsA("Part") or v.Name == "Torso" then
+					PhysicsService:SetPartCollisionGroup(v, npcCollisionGroupName)
+				end
+			end
+			PhysicsService:SetPartCollisionGroup(Soldier:FindFirstChild("HumanoidRootPart"), rootCollisionGroupName)
+		end
+	end
+	for _, Unit in pairs(CollectionService:GetTagged("Unit")) do
+		local unitsArmy = Unit:FindFirstAncestorOfClass("Folder")
+		if unitsArmy ~= nil then
+			if Unit:FindFirstChild("UnitFamily").Value == "Cavalry" then
+				local newUnit = Cavalry.new(Unit)
+				table.insert(GameUnits, newUnit)
+				newUnit:setup()
+			else
+				local newUnit = Infantry.new(Unit)
+				table.insert(GameUnits, newUnit)
+				newUnit:setup()
+			end
+			moraleSetup:Fire(Unit)
+			rangeSetup:Fire(Unit)
+		end
+	end
+	for i, v in pairs(Players:GetChildren()) do
+		ClientGameAlerts:FireClient(v, "SetupEffects")
+	end
+end)
+
+StartGame.Event:Connect(function()
+	VisibilityCheck.OnServerInvoke = function(player, Regiment)
+		--range
+		--team
+		--recently shot
+		local theUnit = getUnit(Regiment)
+		local function checkAllied(player)
+			for i, v in pairs(GameUnits) do
+				if v.playerOwner == player and v.army == theUnit.army then return true end
+			end
+			return false
+		end
+		if theUnit then
+			if theUnit.playerOwner == player then return true end
+			if checkAllied(player) == true then
+				return true
+			end
+			return theUnit.visible
+		end
+	end
+	StatusCheck.OnServerInvoke = function(player, Regiment)
+		--range
+		--team
+		--recently shot
+		local theUnit = getUnit(Regiment)
+		if theUnit then
+			return theUnit.active, theUnit.visible, theUnit:getMorale()
+		else
+			return true, false, true
+		end
+	end
+end)
+--Game scoring Setup
+
+EndSetup.Event:Connect(function(gamemode,attacker,defender)
+	currentGameMode = gamemode
+	for i, v in pairs(CollectionService:GetTagged("StartArea")) do
+		for i, item in pairs(v:GetChildren()) do
+			item.Transparency = 1
+		end
+	end
+	gameInProgress = true
+	EndSetupEvents:Fire(gamemode,attacker,defender)
+	while timeLeft > 0 and gameInProgress do
+		wait(1)
+		timeLeft -= 1
+		GameTime.Value=timeLeft
+	end
+	gameInProgress = false
+	local team1
+	local team2
+
+end)
+EndSetupEvents.Event:Connect(function(gamemode,attacker,defender)
+	--wait(5)
+	local Team1Score = 1
+	local Team2Score = 1
+	local endConnection
+	local gameOverConnection
+	if gamemode == "AvD" then
+		local done = false
+		for i, v in pairs(CollectionService:GetTagged("CaptureFlag")) do
+			if v.Parent == workspace.GameObjects then
+				local objective = v
+				local team1In = false
+				local team2In = false
+				local contested = true
+				local teamUp
+				local interval = 0.5
+				local capTime = 60
+				local winScore
+				
+				if defender == Team1 then
+					winScore = -capTime
+				else
+					winScore = capTime
+				end
+				local objScore = 0
+				
+				
+				if defender == Team1 then
+					objScore = capTime
+				else
+					objScore = -capTime
+				end
+				if objective then
+					--print("YESSIR")
+					local capturePoint = objective.CapturePoint
+					local indicator = objective.Indicator
+					local range = 30
+					local score = objective.BillboardGui.Score
+					local scoreIndicator = objective.BillboardGui.ScoreFrame.Indicator
+					objective.Parent = workspace.GameObjects
+					capturePoint.Transparency = 1
+					indicator.Size = Vector3.new(0.2*(range*2/22), range*2, range*2)
+					indicator.CFrame = capturePoint.CFrame*CFrame.Angles(0,0,math.rad(90))
+					local scoreConnection
+					scoreConnection = GameTime:GetPropertyChangedSignal("Value"):Connect(function()
+						if gameInProgress and Team1Score > 0 and Team2Score > 0 and not done then
+							Team1Score = 0
+							Team2Score = 0
+							local numTeam1In = 0
+							local numTeam2In = 0
+							local defenderIn = false
+							for i, unit in pairs(GameUnits) do
+								if unit.active then
+									local score = unit.soldiersAlive.Value/unit.maxTroops
+									if unit:getMorale() == false then
+										score = score/2
+									end
+									if unit.army.Name == "Team1" then
+										Team1Score += score
+									else
+										Team2Score += score
+									end
+								end
+							end
+							for i, player in pairs(game:GetService("Players"):GetChildren()) do
+								local gui1 = player.PlayerGui.GameInfoGui.Frame:FindFirstChild("Team1").Num
+								gui1.Text = tostring(Round(Team1Score))
+								local gui2 = player.PlayerGui.GameInfoGui.Frame:FindFirstChild("Team2").Num
+								gui2.Text = tostring(Round(Team2Score))
+								local barGui1 = player.PlayerGui.GameInfoGui.Frame:FindFirstChild("ScoreBar").Team1.Score
+								barGui1.Value = Round(Team1Score)
+								local barGui2 = player.PlayerGui.GameInfoGui.Frame:FindFirstChild("ScoreBar").Team2.Score
+								barGui2.Value = Round(Team2Score)
+							end
+
+							team1In = false
+							team2In = false
+							for i, unit in pairs(GameUnits) do
+								if unit.active and unit:getMorale() == true then
+									local unitTeam = unit.army
+									local unitIn = false
+									if (unit.marker.Position - indicator.Position).Magnitude <= range then
+										unitIn = true
+									else
+										local soldierIn = false
+										for i, soldier in pairs(unit.soldiers:GetChildren()) do
+											local soldierRoot = soldier:FindFirstChild("HumanoidRootPart")
+											local soldierHuman = soldier:FindFirstChild("Humanoid")
+											if soldierRoot and soldierHuman and soldierHuman.Health > 0 then
+												if (soldierRoot.Position - indicator.Position).Magnitude <= range then
+													soldierIn = true
+													break
+												end
+											end
+										end
+										if (unit.marker.Position - indicator.Position).Magnitude <= range*2 and soldierIn then
+											unitIn = true
+										end
+									end
+									if unitIn then
+										if unitTeam == defender then
+											defenderIn = true
+										end
+										if unitTeam == Team1 then
+											numTeam1In += 1
+										else
+											numTeam2In += 1
+										end
+									end
+								end
+							end
+					
+							--print(numTeam1In)
+							--print(numTeam2In)
+							if not defenderIn then
+								if numTeam1In ~= numTeam2In and math.abs(objScore) <= capTime then
+									--if math.abs(objScore) < 10 then
+									if numTeam1In > numTeam2In and objScore < capTime then
+										--print("ooh")
+										--objScore+=1
+										if objScore < 0 then
+											objScore+=1
+										else
+											objScore+=1
+										end
+									elseif numTeam1In < numTeam2In and objScore > -capTime then
+										--print("aah")
+										--objScore-=1
+										if objScore > 0 then
+											objScore-=1
+										else
+											objScore-=1
+										end
+									end
+									--end
+								end
+							end
+							contested = false
+							scoreIndicator.Size = UDim2.fromScale(math.abs(objScore)/capTime,1)
+							if teamUp then
+								scoreIndicator.BackgroundColor3 = teamUp.Nation.Color.Value
+							end
+
+							if math.abs(objScore) == 0 then
+								contested = true
+								score.Text = "The objective is contested"
+							else
+								if objScore > 0 then
+									teamUp = Team1
+								else
+									teamUp = Team2
+								end
+								score.Text = teamUp.Nation.Value .. " is capturing the objective, " .. tostring(math.ceil(capTime-math.abs(objScore))) .. " seconds left"
+							end
+					
+							if objScore == winScore then
+								done = true
+							end
+						else
+							scoreConnection:Disconnect()
+						end
+					end)
+					
+				end
+			end
+		end
+		endConnection = GameTime:GetPropertyChangedSignal("Value"):Connect(function()
+			if done then
+				EndGame:Fire(tostring(attacker))
+			elseif Team1Score == 0 then
+				EndGame:Fire("Team2")
+			elseif Team2Score == 0 then
+				EndGame:Fire("Team1")
+			elseif GameTime.Value == 0 then
+				EndGame:Fire(tostring(defender))
+			end	
+		end)
+		gameOverConnection = EndGame.Event:Connect(function()
+			endConnection:Disconnect()
+			gameOverConnection:Disconnect()
+		end)
+	elseif gamemode == "CP" then
+		for i, v in pairs(CollectionService:GetTagged("CaptureFlag")) do
+			if v.Parent == workspace.GameObjects then
+				local objective = v
+				local objScore = 0
+				local team1In = false
+				local team2In = false
+				local contested = true
+				local teamUp
+				local interval = 0.5
+				local capTime = 60
+				if objective then
+					print("YESSIR")
+					local capturePoint = objective.CapturePoint
+					local indicator = objective.Indicator
+					local range = 40
+					local score = objective.BillboardGui.Score
+					local scoreIndicator = objective.BillboardGui.ScoreFrame.Indicator
+					objective.Parent = workspace.GameObjects
+					capturePoint.Transparency = 1
+					indicator.Size = Vector3.new(0.2*(range*2/22), range*2, range*2)
+					indicator.CFrame = capturePoint.CFrame*CFrame.Angles(0,0,math.rad(90))
+					local scoreConnection
+					scoreConnection = GameTime:GetPropertyChangedSignal("Value"):Connect(function()
+						if gameInProgress and Team1Score > 0 and Team2Score > 0 then
+							Team1Score = 0
+							Team2Score = 0
+							local numTeam1In = 0
+							local numTeam2In = 0
+							for i, unit in pairs(GameUnits) do
+								if unit.active then
+									local score = unit.soldiersAlive.Value/unit.maxTroops
+									if unit:getMorale() == false then
+										score = score/2
+									end
+									if unit.army.Name == "Team1" then
+										Team1Score += score
+									else
+										Team2Score += score
+									end
+								end
+							end
+							for i, player in pairs(game:GetService("Players"):GetChildren()) do
+								local gui1 = player.PlayerGui.GameInfoGui.Frame:FindFirstChild("Team1").Num
+								gui1.Text = tostring(Round(Team1Score))
+								local gui2 = player.PlayerGui.GameInfoGui.Frame:FindFirstChild("Team2").Num
+								gui2.Text = tostring(Round(Team2Score))
+								local barGui1 = player.PlayerGui.GameInfoGui.Frame:FindFirstChild("ScoreBar").Team1.Score
+								barGui1.Value = Round(Team1Score)
+								local barGui2 = player.PlayerGui.GameInfoGui.Frame:FindFirstChild("ScoreBar").Team2.Score
+								barGui2.Value = Round(Team2Score)
+							end
+
+							team1In = false
+							team2In = false
+							for i, unit in pairs(GameUnits) do
+								if unit.active and unit:getMorale() == true then
+									local unitTeam = unit.army
+									local unitIn = false
+									if (unit.marker.Position - indicator.Position).Magnitude <= range then
+										unitIn = true
+									else
+										local soldierIn = false
+										for i, soldier in pairs(unit.soldiers:GetChildren()) do
+											local soldierRoot = soldier:FindFirstChild("HumanoidRootPart")
+											local soldierHuman = soldier:FindFirstChild("Humanoid")
+											if soldierRoot and soldierHuman and soldierHuman.Health > 0 then
+												if (soldierRoot.Position - indicator.Position).Magnitude <= range then
+													soldierIn = true
+													break
+												end
+											end
+										end
+										if (unit.marker.Position - indicator.Position).Magnitude <= range*2 and soldierIn then
+											unitIn = true
+										end
+									end
+									if unitIn then
+										if unitTeam == Team1 then
+											numTeam1In += 1
+										else
+											numTeam2In += 1
+										end
+									end
+								end
+							end
+					
+							--print(numTeam1In)
+							--print(numTeam2In)
+							if numTeam1In ~= numTeam2In and math.abs(objScore) <= capTime then
+								--if math.abs(objScore) < 10 then
+								if numTeam1In > numTeam2In and objScore < capTime then
+									--print("ooh")
+									--objScore+=1
+									if objScore < 0 then
+										objScore+=2
+									else
+										objScore+=1
+									end
+								elseif numTeam1In < numTeam2In and objScore > -capTime then
+									--print("aah")
+									--objScore-=1
+									if objScore > 0 then
+										objScore-=2
+									else
+										objScore-=1
+									end
+								end
+								--end
+							end
+							contested = false
+							scoreIndicator.Size = UDim2.fromScale(math.abs(objScore)/capTime,1)
+							if teamUp then
+								scoreIndicator.BackgroundColor3 = teamUp.Nation.Color.Value
+							end
+
+							if math.abs(objScore) == 0 then
+								contested = true
+								score.Text = "The objective is contested"
+							else
+								if objScore > 0 then
+									teamUp = Team1
+								else
+									teamUp = Team2
+								end
+								score.Text = teamUp.Nation.Value .. " is capturing the objective, " .. tostring(math.ceil(capTime-math.abs(objScore))) .. " seconds left"
+							end
+					
+						else
+							scoreConnection:Disconnect()
+						end
+					end)
+					endConnection = GameTime:GetPropertyChangedSignal("Value"):Connect(function()
+						if Team1Score == 0 then
+							EndGame:Fire("Team2")
+						elseif Team2Score == 0 then
+							EndGame:Fire("Team1")
+						elseif GameTime.Value == 0 then
+							if objScore < capTime then
+								if math.abs(Team1Score - Team1Score) >= 1.5 then
+									if Team1Score > Team2Score then
+										EndGame:Fire("Team1")
+									else
+										EndGame:Fire("Team2")
+									end 
+								else
+									EndGame:Fire("Tie")
+								end
+							elseif objScore > 0 then
+								EndGame:Fire("Team1")
+							elseif objScore < 0 then
+								EndGame:Fire("Team2")
+							else
+								if math.abs(Team1Score - Team1Score) >= 1.5 then
+									if Team1Score > Team2Score then
+										EndGame:Fire("Team1")
+									else
+										EndGame:Fire("Team2")
+									end 
+								else
+									EndGame:Fire("Tie")
+								end
+							end
+						end
+					end)
+					gameOverConnection = EndGame.Event:Connect(function()
+						endConnection:Disconnect()
+						gameOverConnection:Disconnect()
+					end)
+				end
+			end
+		end
+	end
+	
+
+	
+end)
+EndSetupEvents.Event:Connect(function()
+	while gameInProgress do
+		wait(0.5)
+		for i, theUnit in pairs(GameUnits) do
+			local rangeCheck = false
+			local visibleRange = 1000 - theUnit.currentStealth * 100
+			for i, unit in pairs(GameUnits) do
+				if unit.army ~= theUnit.army then
+					if (unit.marker.CFrame.p-theUnit.marker.CFrame.p).Magnitude <= visibleRange then
+						rangeCheck = true
+					end
+				end
+			end
+			if rangeCheck == true or theUnit:getMorale() == false then
+				theUnit.visible = true
+			else
+				theUnit.visible = false
+			end
+			if theUnit.visible == true then
+				theUnit.label.Stealth.Text = "Unit is visible! Can be seen from " .. tostring(visibleRange) .. " studs away."
+				--theUnit.label.Stealth.Text = "Visible: " .. tostring(theUnit.visible) .. ", Stealth: " .. tostring(theUnit.currentStealth)
+			else
+				theUnit.label.Stealth.Text = "Unit is hidden. Can be seen from " .. tostring(visibleRange) .. " studs away."
+			end
+		end
+	end
+end)
+--timer
+GameTime:GetPropertyChangedSignal("Value"):Connect(function()
+	if gameInProgress then
+		for i, player in pairs(Players:GetChildren()) do
+			player.PlayerGui.GameInfoGui.Frame.Time.Text = "GameMode: " .. currentGameMode .. " | Time Left: " .. convertToHMS(timeLeft)
+		end
+	end
+end)
+--End Game events
+EndGame.Event:Connect(function()
+	--[[for i, player in pairs(Players:GetChildren()) do
+		player.PlayerGui.GameInfoGui.Frame.Time.Text = "No game in progress"
+	end]]
+	gameInProgress = false
+	timeLeft = gameLength
+	for i, v in pairs(CollectionService:GetTagged("StartArea")) do
+		for i, item in pairs(v:GetChildren()) do
+			item.Transparency = 0.5
+		end
+	end
+	for i, v in pairs(CollectionService:GetTagged("StartMarker")) do
+		for i, item in pairs(v:GetChildren()) do
+			item.Transparency = 0.7
+		end
+	end
+end)
+EndGame.Event:Connect(function(Winner)
+	setPlayerGuiText("game is done")
+	if Winner ~= "Tie" then
+		local winnerArmy
+		for i, v in pairs(CollectionService:GetTagged("Army")) do
+			if v.Name == Winner then
+				winnerArmy = v
+			end
+		end
+		setPlayerGuiText(winnerArmy.Nation.Value .. " has won the game!")
+		print(winnerArmy.Nation.Value .. " has won the game!")
+	else
+		setPlayerGuiText("The battle is a stalemate.")
+		print("The battle is a stalemate.")
+	end
+	wait(5)
+	for i=5,1,-1 do
+		print("Game ends in " .. tostring(i))
+		setPlayerGuiText("Game ends in " .. tostring(i))
+		wait(1)
+	end
+	local scripts = game:GetService("ServerScriptService")
+	--scripts:FindFirstChild("FullGameManager").Disabled = true
+	while #GameUnits>0 do
+		local unit = table.remove(GameUnits, 1)
+		unit = nil
+	end
+	for i, v in pairs(game.Workspace:GetDescendants()) do
+		if CollectionService:HasTag(v, "Unit") and CollectionService:HasTag(v.Parent, "Army") then
+			v:Destroy()
+		end
+	end
+	for i, player in pairs(Players:GetChildren()) do
+		local gui = player.PlayerGui
+		gui.UnitsGui:ClearAllChildren()
+		gui.BottomBar:FindFirstChild("Team1").Visible = false
+		gui.BottomBar:FindFirstChild("Team2").Visible = false
+		for i, v in pairs(gui:GetDescendants()) do
+			if v.Name == "UnitProfile" then
+				v:Destroy()
+			end
+		end
+	end
+	for i, player in pairs(Players:GetChildren()) do
+		ClientGameAlerts:FireClient(player, "End", Winner)
+	end
+	print("There are " .. tostring(#GameUnits) .. " units left in game")
+	setPlayerGuiText("No game in progress")
+end)
