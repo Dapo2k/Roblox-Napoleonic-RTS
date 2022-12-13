@@ -1,0 +1,81 @@
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local BattleEvents = ReplicatedStorage:WaitForChild("GameOrg"):WaitForChild("BattleEvents")
+local ClientComm = ReplicatedStorage:WaitForChild("GameOrg"):WaitForChild("ClientComm")
+local GameManagementEvents = ReplicatedStorage:WaitForChild("GameOrg"):WaitForChild("GameManagementEvents")
+local ClientGameAlerts = ClientComm:WaitForChild("ClientGameAlerts")
+local StartGame = GameManagementEvents:WaitForChild("StartGame")
+local CreateSoldier = GameManagementEvents:WaitForChild("CreateSoldier")
+local CreateUnit = GameManagementEvents:WaitForChild("CreateUnit")
+local StartRealGame = GameManagementEvents:WaitForChild("StartRealGame")
+local EndGame = GameManagementEvents:WaitForChild("EndGame")
+local CollectionService = game:GetService("CollectionService")
+local EndSetup = GameManagementEvents:WaitForChild("EndSetup")
+local TPInfo = GameManagementEvents:WaitForChild("TPInfo")
+local Event = ClientComm:WaitForChild("Event")
+local rowLength = 12
+local gameStarted = false
+local Players = game:GetService("Players")
+local gamemodes = {"AvD", "CP"}
+local currentMode = "CP"
+local attacker
+local defender
+local units = {}
+local TP = GameManagementEvents:FindFirstChild("TP")
+
+local playerCount = 2
+local playerJoined = false
+
+local Ready = false
+
+local playerUnits = {
+}
+TPInfo.OnServerEvent:Connect(function(player, info)
+	playerCount = #info
+	for i, data in pairs(info) do
+		if data[1] == tostring(player) then
+			if data[2] == 1 then
+				player.Team = "Team1"
+			else
+				player.Team = "Team2"
+			end
+		end
+	end
+	
+end)
+Players.PlayerAdded:Connect(function(player)
+	player.CharacterAppearanceLoaded:Connect(function()
+		player.PlayerGui:WaitForChild("UnitSelection")
+		print("number of players: " .. tostring(#Players:GetChildren()))
+		playerJoined = true
+		if #Players:GetChildren() == playerCount then
+			Ready = true
+		end
+		if not Ready then
+			Event:FireAllClients(1)
+		end
+	end)
+end)
+while not playerJoined do
+	wait(1)
+end
+for i = 15, 1, -1 do
+	Event:FireAllClients(1, i)
+	wait(1)
+	if Ready then break end
+end
+if Ready then
+	Event:FireAllClients(1, nil, 1)
+	ClientGameAlerts:FireAllClients("StartSetup")
+	StartRealGame:Fire()
+elseif not Ready then
+	print("yikes")
+	TP:Fire(1)
+end
+wait(5)
+print("Stage2")
+gameStarted = true
+for i, team in pairs(game.Teams:GetChildren()) do
+	if #team:GetPlayers() < 1 then
+		--return
+	end
+end
