@@ -1,0 +1,351 @@
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local ServerStorage = game:GetService("ServerStorage")
+
+local BattleEvents = ReplicatedStorage:WaitForChild("GameOrg"):WaitForChild("BattleEvents")
+local ClientComm = ReplicatedStorage:WaitForChild("GameOrg"):WaitForChild("ClientComm")
+local GameManagementEvents = ReplicatedStorage:WaitForChild("GameOrg"):WaitForChild("GameManagementEvents")
+local terrainSaveLoad = require(game.ServerScriptService.TerrainSaveLoad)
+--local RealGameEvents = ReplicatedStorage["Real Game Events"]
+local StartGame = GameManagementEvents:WaitForChild("StartGame")
+local CreateSoldier = GameManagementEvents:WaitForChild("CreateSoldier")
+local CreateUnit = GameManagementEvents:WaitForChild("CreateUnit")
+local StartRealGame = GameManagementEvents:WaitForChild("StartRealGame")
+local EndGame = GameManagementEvents:WaitForChild("EndGame")
+local EndSetup = GameManagementEvents:WaitForChild("EndSetup")
+local CollectionService = game:GetService("CollectionService")
+local ClientGameAlerts = ClientComm:WaitForChild("ClientGameAlerts")
+local Event = ClientComm:WaitForChild("Event")
+local PhysicsService = game:GetService("PhysicsService")
+local TP = GameManagementEvents:FindFirstChild("TP")
+local TeleportService = game:GetService("TeleportService")
+local lobby = 6187503751
+
+local BuyUnitCheck = ClientComm.BuyUnitCheck
+local ReadySend = ClientComm.ReadySend
+local UnitCards = ReplicatedStorage.UnitCards
+
+local rowLength = 12
+local gameStarted = false
+local Players = game:GetService("Players")
+local gamemodes = {"AvD", "CP"}
+local currentMode = "AvD"
+local attacker = workspace.GameObjects.Team1
+local defender = workspace.GameObjects.Team2
+local units = {}
+local numTeam1 = 0
+local numTeam2 = 0
+local maxFunds = 1400
+local maxUnits = 10
+
+local function getRow(index, RowLength)
+	local row = math.ceil(index/RowLength)
+	return row
+end
+Players.PlayerAdded:Connect(function(player)
+	local Funds = Instance.new("IntValue")
+	local Ready = Instance.new("BoolValue")
+	local Units = Instance.new("Folder")
+	local Team = Instance.new("StringValue")
+	Ready.Name = "Ready"
+	Funds.Name = "Funds"
+	Units.Name = "Units"
+	Team.Name = "TeamName"
+	Funds.Parent = player
+	Units.Parent = player
+	Ready.Parent = player
+	Team.Parent = player
+	Team.Value = player.Team.Name
+end)
+BuyUnitCheck.OnServerInvoke = function(player, action, unitType)
+	print("oof")
+	local unit = UnitCards:FindFirstChild(unitType)
+	if action == "Add" then
+		if unit.Cost.Value <= player.Funds.Value and #player.Units:GetChildren() < maxUnits/(#game.Teams[player.Team.Name]:GetPlayers()) then
+			player.Funds.Value -= unit.Cost.Value
+			local cardClone = unit:Clone()
+			cardClone.Parent = player.Units
+			return true, player.Funds.Value
+		end
+	elseif action == "Remove" then
+		for i, v in pairs(player.Units:GetChildren()) do
+			if v.Name == unitType then
+				v:Destroy()
+				player.Funds.Value += unit.Cost.Value
+				return true, player.Funds.Value
+			end
+		end
+	end
+	return false
+end
+ReadySend.OnServerEvent:Connect(function(player)
+	if player.Ready.Value == true then
+		player.Ready.Value = false
+	else
+		player.Ready.Value = true
+	end
+end)
+StartRealGame.Event:Connect(function()
+	local candidates = CollectionService:GetTagged("Army")
+	defender = table.remove(candidates,math.random(#candidates))
+	attacker = table.remove(candidates,math.random(#candidates))
+	for i, player in pairs(Players:GetChildren()) do
+		if player.Team == game.Teams.Team1 then
+			numTeam1 +=1
+		else
+			numTeam2 +=1
+		end
+	end
+	currentMode = gamemodes[math.random(#gamemodes)]
+	local nations = ReplicatedStorage.Nations:GetChildren()
+	if gameStarted then return end
+	for i, army in pairs(CollectionService:GetTagged("Army")) do
+		if army.Nation then
+			army.Nation:Destroy()
+		end
+		local newNation = table.remove(nations, math.random(#nations)):Clone()
+		newNation.Parent = army
+		newNation.Name = "Nation"
+		Event:FireAllClients(2, currentMode, army, newNation)
+	end
+	
+	local maps = ServerStorage.Maps:GetChildren()
+	local theMap = table.remove(maps, math.random(#maps))
+	for i, player in pairs(Players:GetChildren()) do
+		local relFunds = maxFunds
+		if tostring(player.Team) == tostring(defender) and currentMode == "AvD" then
+			relFunds -= 200
+		else
+			--relFunds += 200
+		end
+		if player.Team == game.Teams.Team1 then
+			player.Funds.Value = relFunds/numTeam1
+		else
+			player.Funds.Value = relFunds/numTeam2
+		end
+	end
+	Event:FireAllClients(3, currentMode, theMap.Name)
+	
+	local map = Instance.new("Folder")
+	map.Parent = workspace
+	map.Name = theMap.Name
+	local decoration = Instance.new("Folder")
+	decoration.Name = "Decoration"
+	local trees = Instance.new("Folder")
+	trees.Name = "Trees"
+	decoration.Parent = map
+	trees.Parent = map
+	
+	for i, v in pairs(theMap:GetChildren()) do
+		if v.Name ~= "Decoration" and v.Name ~= "Trees" then
+			v.Parent = map
+		end
+	end
+	local totalChildren = #theMap.Decoration:GetChildren() + #theMap.Trees:GetChildren()
+	terrainSaveLoad:Load(map.SavedTerrain)
+	for i, material in pairs(map.SavedTerrain.TerrainColors:GetChildren()) do
+		game.Workspace.Terrain:SetMaterialColor(Enum.Material[material.Name], material.Value)
+	end
+	CollectionService:AddTag(map, "Map")
+	map.Parent = workspace
+	map.Name = "GameMap"
+	local loadedChildren = 0
+	local pause = 0
+	for i, v in pairs(theMap.Decoration:GetChildren()) do
+		v.Parent = decoration
+		loadedChildren += 1
+		ReplicatedStorage:WaitForChild("LoadPercent").Value = loadedChildren/totalChildren
+		pause+=1
+		if pause>=10 then
+			wait()
+			pause = 0
+		end
+	end
+	for i, v in pairs(theMap.Trees:GetChildren()) do
+		v.Parent = trees
+		loadedChildren += 1
+		ReplicatedStorage:WaitForChild("LoadPercent").Value = loadedChildren/totalChildren
+		pause+=1
+		if pause>=10 then
+			wait()
+			pause = 0
+		end
+	end
+	--map.Trees.Parent = workspace.Map
+	--map.Decoration.Parent = workspace.Map
+	map.HidingAreas.Parent = workspace.GameObjects
+	map.Points.Parent = workspace.GameObjects
+	theMap:Destroy()
+	for i, part in pairs(map.Decoration:GetDescendants()) do
+		if part:IsA("BasePart") or part:IsA("Part") or part:IsA("UnionOperation") and not part:FindFirstAncestor("GameObjects") then
+			PhysicsService:SetPartCollisionGroup(part,"Walls")
+		end
+	end
+	Event:FireAllClients(4)
+	--[[local stageDone = false
+	while not stageDone do
+		local playersReady = false
+		while not playersReady do
+			wait(1)
+			playersReady = true
+			for i, player in pairs(Players:GetChildren()) do
+				if player.Ready.Value == false then
+					playersReady = false
+				end
+			end
+		end
+		for i = 5 , 1 , -1 do
+			Event:FireAllClients(4,i)
+			for index, player in pairs(Players:GetChildren()) do
+				if player.Ready.Value == false then
+					playersReady = false
+					break
+				end
+			end
+			if not playersReady then
+				break
+			end
+			wait(1)
+		end
+		if playersReady then
+			stageDone = true
+		end
+	end]]
+	local selectionTimer = 45
+	local readyTimer = 5
+	while selectionTimer > 0 and readyTimer > 0 do
+		wait(1)
+		local playersReady = true
+		for i, player in pairs(Players:GetChildren()) do
+			if player.Ready.Value == false then
+				playersReady = false
+			end
+		end
+		if playersReady then
+			readyTimer-=1
+		else
+			readyTimer = 5
+		end
+		selectionTimer-=1
+		
+		local displayTimer
+		if playersReady and readyTimer < selectionTimer then
+			displayTimer = readyTimer
+		else
+			displayTimer = selectionTimer
+		end
+		Event:FireAllClients(4,displayTimer)
+	end
+	Event:FireAllClients(5)
+	local loadedUnits = 0
+	local totalUnits = 0
+	for i, player in pairs(Players:GetChildren()) do
+		while player.Funds.Value >= 200 do
+			local unit = ReplicatedStorage.UnitCards.Infantry
+			player.Funds.Value -= unit.Cost.Value
+			local cardClone = unit:Clone()
+			cardClone.Parent = player.Units
+		end
+		while player.Funds.Value >= 150 do
+			local unit = ReplicatedStorage.UnitCards.Militia
+			player.Funds.Value -= unit.Cost.Value
+			local cardClone = unit:Clone()
+			cardClone.Parent = player.Units
+		end
+		totalUnits+=#player.Units:GetChildren()
+	end
+	for i, player in pairs(Players:GetChildren()) do
+		local index = 1
+		for i, unitCard in pairs(player.Units:GetChildren()) do
+			print("Creating Unit")
+			local newUnit = CreateUnit:Invoke(unitCard,player,player.Team.Name, "Start")
+			unitCard.Value = unitCard.Name
+			unitCard.Name = workspace.GameObjects:FindFirstChild(player.Team.Name).Nation.Value .. ", " .. unitCard.Name .. ", " .. index
+			local kills = Instance.new("IntValue")
+			local troops = Instance.new("IntValue")
+			kills.Name = "Kills"
+			troops.Name = "TroopsLeft"
+			kills.Parent = unitCard
+			troops.Parent = unitCard
+			kills.Value = 0
+			troops.Value = unitCard.Troops.Value
+			index+=1
+			loadedUnits+=1
+			print("loading percent is" .. tostring(loadedUnits/totalUnits))
+			Event:FireAllClients(5,loadedUnits/totalUnits)
+		end
+	end
+	wait(2)
+	for i, player in pairs(Players:GetChildren()) do
+		ClientGameAlerts:FireClient(player, "Start")
+	end
+	for i, v in pairs(CollectionService:GetTagged("CaptureFlag")) do
+		if v:FindFirstAncestor("Workspace") then
+			v:Destroy()
+		end
+	end
+	local points = workspace.GameObjects.Points
+	print("yes1")
+	for i, v in pairs(CollectionService:GetTagged("GamePoints")) do
+		if v:FindFirstAncestor("Workspace") then
+			points = v
+			print("yes2")
+			for i, j in pairs(points:GetChildren()) do
+				j.Transparency = 1
+			end
+		end
+	end
+	if currentMode == "CP" then
+		local objective = ReplicatedStorage.GamePieces.Objective:Clone()
+		objective.Parent = workspace.GameObjects
+		objective:MoveTo(points.MF.Position)
+		StartGame:Fire("CP")
+		print("yes3")
+	elseif currentMode == "AvD" then
+		for i, spot in pairs(points:GetChildren()) do
+			if spot.Name == tostring(defender) then
+				local objective = ReplicatedStorage.GamePieces.Objective:Clone()
+				objective.Parent = workspace.GameObjects
+				objective:MoveTo(spot.Position)
+				print("yes4")
+			end
+		end
+		StartGame:Fire("AvD",attacker,defender)
+	end
+	
+	for i, player in pairs(Players:GetChildren()) do
+		wait(1)
+		player.PlayerGui.LoadingUnits.Enabled = false
+	end
+	for i = 45, 1, -1 do
+		print(i)
+		workspace.GameObjects.TimeLeft.Value=i
+		Event:FireAllClients(6,i)
+		wait(1)
+	end
+	for i, player in pairs(Players:GetChildren()) do
+		ClientGameAlerts:FireClient(player, "EndSetup")
+	end
+	EndSetup:Fire(currentMode,attacker,defender)
+	
+end)
+
+local SafeTeleport = require(game.ServerScriptService.SafeTeleport)
+
+Event.OnServerEvent:Connect(function(player)
+	TP:Fire(3,player)
+end)
+
+TP.Event:Connect(function(reason, thePlayer)
+	Event:FireAllClients(7, reason)
+	if reason == 1 or reason == 2 then
+		local TPPlayers = {}
+		for i, player in pairs(Players:GetChildren()) do
+			if player ~= thePlayer then
+				table.insert(TPPlayers, player)
+			end
+		end
+		SafeTeleport(lobby, TPPlayers)
+	elseif reason == 3 then
+		SafeTeleport(lobby, {thePlayer})
+	end
+end)
