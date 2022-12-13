@@ -1,0 +1,842 @@
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local SoundService = game:GetService("SoundService")
+local UserInputService = game:GetService("UserInputService")
+SoundService.RespectFilteringEnabled = true
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local ClientComm = ReplicatedStorage:WaitForChild("GameOrg"):WaitForChild("ClientComm")
+local Player = Players.LocalPlayer
+local UnitMover = ClientComm:FindFirstChild("UnitMover")
+local RowUpdate = ClientComm:FindFirstChild("RowUpdate")
+local AttackModeUpdater = ClientComm:FindFirstChild("AttackModeUpdate")
+local ClientGameAlerts = ClientComm:FindFirstChild("ClientGameAlerts")
+local SelectCheck = ClientComm:FindFirstChild("SelectCheck")
+local UnitTargeter = ClientComm:FindFirstChild("UnitTargeter") -- whole
+local SelectSounds = script:WaitForChild("SelectSounds")
+local MoveSounds = script:WaitForChild("MoveSounds")
+local TargetSounds = script:WaitForChild("TargetSounds")
+local mouse = Player:GetMouse()
+local SelectedUnits = {}
+local ogPreview = ReplicatedStorage.LocalPieces:WaitForChild("Preview")
+local ogPreviewWall = ReplicatedStorage.LocalPieces:WaitForChild("PreviewWall")
+local ogPreviewGarr = ReplicatedStorage.LocalPieces:WaitForChild("PreviewGarrison")
+local preview
+local previewPart
+local previewUnit
+local previewWall
+local previewGarr
+local newPos = nil
+local currentSound = nil
+local CollectionService = game:GetService("CollectionService")
+local raycastParams = RaycastParams.new()
+local click1 = false
+local click2 = false
+local mouseHover = false
+local con1,con2,con3,con4,con5,con6,con7,con8,con9
+local canStart = true
+local canEnd = true
+local hoveringOnEnemy = false
+local CurrentUnits = {}
+local currentOtherRegi = nil
+local setupStage = false
+local onWall = false
+local wall
+local onSpot = false
+local spot
+local TestPart1 = ReplicatedStorage.LocalPieces.TestPart:Clone()
+local TestPart2 = ReplicatedStorage.LocalPieces.TestPart:Clone()
+TestPart1.Parent = workspace
+TestPart2.Parent = workspace
+local goalPos = nil
+
+local hideFoliage = false
+
+
+--testPart = Instance
+local Borders = game.Workspace.GameObjects.Borders
+raycastParams.FilterType = Enum.RaycastFilterType.Whitelist
+raycastParams.FilterDescendantsInstances = {workspace.Terrain}
+raycastParams.IgnoreWater = true
+Unit = {}
+Unit.__index = Unit
+function Unit.new(Reference)
+	local newUnit = {}
+	newUnit.Regiment = Reference
+	newUnit.Index = Reference.Index.Value
+	newUnit.Selected = false
+	newUnit.UMID = 0
+	setmetatable(newUnit, Unit)
+	return newUnit
+end
+local function isForward(base, targetPos, value)
+	local forward = base.CFrame.lookVector
+	local displacement = targetPos - base.Position -- (direction)
+	local amountForward = forward:Dot(displacement)
+	if value == 1 then
+		if amountForward >=0 then
+			return true
+		else
+			return false
+		end
+	elseif value == 2 then
+		return amountForward
+	end
+end
+local function isLeft(base, targetPos, value)
+	local forward = base.lookVector
+	local left = (base*CFrame.Angles(0,math.rad(90),0)).lookVector
+	local displacement = targetPos - base.Position -- (direction)
+	local amountLeft = left:Dot(displacement)
+	if value == 1 then
+		if amountLeft >=0 then
+			return true
+		else
+			return false
+		end
+	elseif value == 2 then
+		return amountLeft
+	end
+end
+local function inBounds(raycastResultPos)
+	if not setupStage then
+		for i, border in pairs(Borders:GetChildren()) do
+			if border.Name ~= "Top" then
+				if isForward(border, raycastResultPos, 1) == true then
+					return false
+				end
+			end
+		end
+	else
+		for i, border in pairs(game.Workspace.GameObjects:FindFirstChild(Player.Team.Name .. "StartArea"):GetChildren()) do
+			if isForward(border, raycastResultPos, 1) == true then
+				return false
+			end
+		end
+	end
+	return true
+end
+local function Search(Sources, a1, a2)
+	--Regardless of whether we started in the top left, top right, etc., we want
+	--a1 to be the top left corner and a2 to be the bottom right corner.
+	a1, a2 = Vector2.new(math.min(a1.x, a2.x), math.min(a1.y, a2.y)), Vector2.new(math.max(a1.x, a2.x), math.max(a1.y, a2.y));
+	local Found = {};
+	local rel, x, y;
+	for i, v in pairs(Sources) do
+		--This does the same pointToObjectSpace logic as up above.
+		rel = workspace.CurrentCamera.CoordinateFrame:pointToObjectSpace(v.Position);
+		x, y = rel.x / -rel.z, rel.y / -rel.z;
+		--Are we within bounds?
+		if a1.x < x and x < a2.x and a1.y < y and y < a2.y and rel.z < 0 then
+			table.insert(Found, v);
+		end
+	end
+	return Found;
+end
+local function getLowestIndex()
+	local lowInd = 1
+	for i, unit in pairs(CurrentUnits) do
+		if unit.Index < CurrentUnits[lowInd].Index then
+			lowInd = i;
+		end
+	end
+	local unit = table.remove(CurrentUnits, lowInd)
+	return unit
+end
+local function getLowestIndex2()
+	local lowInd = 1
+	for i, unit in pairs(CurrentUnits) do
+		if unit.Index < CurrentUnits[lowInd].Index then
+			lowInd = i;
+		end
+	end
+	local unit = CurrentUnits[lowInd]
+	return unit
+end
+local function numSelected()
+	local number = 0
+	for i, v in pairs(CurrentUnits) do
+		if v.Selected == true then
+			number += 1
+		end
+	end
+	return number
+end
+local function findUnit(Regiment)
+	for i, unit in pairs(CurrentUnits) do
+		if unit.Regiment == Regiment then
+			return unit
+		end
+	end
+end
+local function checkBounds(corner1,corner2,position)
+	local xBound = false
+	local zBound = false
+	if corner1.X<corner2.X then
+		if corner1.X<position.X and position.X<corner2.X then
+			xBound = true
+		end
+	elseif corner1.X>corner2.X then	
+		if corner1.X>position.X and position.X>corner2.X then
+			xBound = true
+		end
+	end
+	if corner1.Z<corner2.Z then
+		if corner1.Z<position.Z and position.Z<corner2.Z then
+			zBound = true
+		end
+	elseif corner1.Z>corner2.Z then
+		if corner1.Z>position.Z and position.Z>corner2.Z then
+			zBound = true
+		end
+	end
+	if xBound and zBound then 
+		return true 
+	else return false
+	end
+end
+local function playSound(Sound, duration)
+	local playingSound = Sound
+	playingSound:Play()
+	wait(duration)
+	playingSound:Stop()
+end
+local function Highlight(HighlightedRegi, value)
+	for i, item in pairs(HighlightedRegi:GetDescendants()) do
+		if item.Name == "Highlighter" then
+			item.Visible = value
+		end
+		if item.Name == "GoToPart" and item.Parent ~=HighlightedRegi then
+			if value == true then
+				item.Transparency = 0.85
+			else
+				item.Transparency = 1
+			end
+		end
+		if item.Name == "MusketRange" or item.Name == "MeleeRange" or item.Name == "ChargeRange" then
+			if value == true then
+				item.Transparency = 0.85
+			else
+				item.Transparency = 1
+			end
+		end
+	end
+end
+local function otherHighlight(HighlightedRegi, value)
+	local myUnit = false
+	for i, unit in pairs(CurrentUnits) do
+		if HighlightedRegi == unit.Regiment then
+			myUnit = true
+		end
+	end
+	if myUnit then
+		for i, item in pairs(HighlightedRegi:GetDescendants()) do
+			if item.Name == "Highlighter" then
+				item.Visible = value
+			end
+		end
+	else
+		if HighlightedRegi.Parent == CurrentUnits[1].Regiment.Parent then
+			for i, item in pairs(HighlightedRegi:GetDescendants()) do
+				if item.Name == "FriendlyHighlighter" then
+					item.Visible = value
+				end
+			end
+		else
+			hoveringOnEnemy = value
+			if preview then
+				if value then
+					previewPart.Transparency = 1
+					previewUnit.Transparency = 1
+				else
+					previewPart.Transparency = 0
+					previewUnit.Transparency = 0
+				end
+			end
+			for i, item in pairs(HighlightedRegi:GetDescendants()) do
+				if item.Name == "HostileHighlighter" then
+					item.Visible = value
+				end
+			end
+		end
+	end
+end
+local function targetingHighlight(HighlightedRegi, TargetRegi, value)
+	for i, item in pairs(HighlightedRegi:GetDescendants()) do
+		if item.Name == "Highlighter" then
+			item.Visible = value
+		end
+		if item.Name == "MusketRange" or item.Name == "MeleeRange" or item.Name == "ChargeRange" then
+			if value == true then
+				item.Transparency = 0.85
+			else
+				item.Transparency = 1
+			end
+		end
+	end
+	for i, item in pairs(TargetRegi:GetDescendants()) do
+		if item.Name == "HostileHighlighter" then
+			item.Visible = value
+		end
+	end
+end
+UserInputService.InputBegan:Connect(function(input)
+	if input.KeyCode ==  Enum.KeyCode.M then
+		if not hideFoliage then
+			hideFoliage = true
+			for i, part in pairs(workspace.GeneratedTrees:GetDescendants()) do
+				if part:IsA("Part") and part.Name == "Leaves" then
+					part.Transparency = 0.9
+				end
+			end
+			for i, part in pairs(CollectionService:GetTagged("Foliage")) do
+				part.Transparency = 0.5
+			end
+		else
+			hideFoliage = false
+			for i, part in pairs(workspace.GeneratedTrees:GetDescendants()) do
+				if part:IsA("Part") and part.Name == "Leaves" then
+					part.Transparency = 0
+				end
+			end
+			for i, part in pairs(CollectionService:GetTagged("Foliage")) do
+				part.Transparency = 0.1
+			end
+		end
+	end
+end)
+
+UserInputService.InputBegan:Connect(function(input)
+	if input.KeyCode ==  Enum.KeyCode.T then
+		for i, part in pairs(CollectionService:GetTagged("LocalGoToPart")) do
+			if part.Parent == workspace.GameObjects then
+				part.Transparency = 0.8
+			end
+		end
+	end
+end)
+UserInputService.InputEnded:Connect(function(input)
+	if input.KeyCode ==  Enum.KeyCode.T then
+		for i, part in pairs(CollectionService:GetTagged("LocalGoToPart")) do
+			if part.Parent == workspace.GameObjects then
+				part.Transparency = 1
+			end
+		end
+	end
+end)
+
+UserInputService.InputBegan:Connect(function(input)
+	if input.KeyCode ==  Enum.KeyCode.G then
+		for i, part in pairs(CollectionService:GetTagged("VisibilityModifier")) do
+			part.Size = Vector3.new(part.Size.X,20,part.Size.Z)
+			part.Transparency = 0.7
+		end
+	end
+end)
+UserInputService.InputEnded:Connect(function(input)
+	if input.KeyCode ==  Enum.KeyCode.G then
+		for i, part in pairs(CollectionService:GetTagged("VisibilityModifier")) do
+			part.Transparency = 1
+			part.Size = Vector3.new(part.Size.X,0.2,part.Size.Z)
+		end
+	end
+end)
+
+
+ClientGameAlerts.OnClientEvent:Connect(function(Event)
+	--print("Got event")
+	if Event == "StartSetup" then
+		setupStage = true
+	elseif Event == "EndSetup" then
+		setupStage = false
+	elseif Event == "Start" then
+		if not canStart then return end
+		canStart = false
+		if con1 and con2 and con3 and con4 and con5 and con6 and con7 then
+			con1:Disconnect()
+			con2:Disconnect()
+			con3:Disconnect()
+			con4:Disconnect()
+			con5:Disconnect()
+			con6:Disconnect()
+			con7:Disconnect()
+		end
+		con1 = mouse.Button1Up:Connect(function()
+			if numSelected() > 0 and not mouseHover and click1 and preview then
+				for i, v in pairs (CurrentUnits) do
+					Highlight(v.Regiment, false)
+					v.Selected = false
+				end
+				preview:Destroy()
+				preview=nil
+				previewWall:Destroy()
+				previewWall=nil
+				previewGarr:Destroy()
+				previewGarr=nil
+			end
+		end)
+		con2 = UnitMover.OnClientEvent:Connect(function(Action, Regiment, GoToPart, OtherRegiment)
+			if Action == "Add" then
+				table.insert(CurrentUnits, Unit.new(Regiment))
+				for i, v in pairs(CurrentUnits) do
+					--print(v.Regiment)
+					--print("Index, " .. i)
+				end
+			end
+			local unit = findUnit(Regiment)
+			if unit.Regiment == Regiment then
+				if Action == "Hover" then
+					mouseHover = true
+					Highlight(Regiment, true)
+				end
+				if Action == "Hover end" then
+					mouseHover = false
+					if unit.Selected == true then return end
+					Highlight(Regiment, false)
+					if currentOtherRegi then
+						otherHighlight(currentOtherRegi, false)
+						currentOtherRegi = nil
+					end
+				end
+				if Action == "Hover target" then
+					mouseHover = true
+					currentOtherRegi = OtherRegiment
+					targetingHighlight(Regiment, OtherRegiment, true)
+				end
+				if Action == "Hover retreat" then
+					mouseHover = true
+					otherHighlight(Regiment, true)
+				end
+				if Action == "Select unit" then
+					--print("Trying to select unit")
+					if unit.Selected == false then
+						unit.Selected = true
+						Highlight(Regiment, true)
+						if numSelected() == 1 then
+							if currentSound then currentSound:Stop() end
+							preview = ogPreview:Clone()
+							previewWall = ogPreviewWall:Clone()
+							previewGarr = ogPreviewGarr:Clone()
+							wait(0.1)
+							preview.Parent = game.workspace
+							previewWall.Parent = game.Workspace
+							previewGarr.Parent = game.Workspace
+							for i, v in pairs(preview:GetChildren()) do
+								if v.Name == "PreviewPart" then
+									previewPart = v
+									previewPart.Name = "PreviewPart"
+									previewPart.Orientation = Regiment:FindFirstChild("GoToPart").Orientation
+								elseif v.Name == "PreviewUnit" then
+									previewUnit = v
+									previewUnit.Name = "PreviewUnit"
+								end
+								v.Locked = true
+								v.Transparency = 0.3
+								v.CanCollide = false
+							end
+							local Sounds = SelectSounds:GetChildren()
+							currentSound = Sounds[math.random(#Sounds)]
+							playSound(currentSound, 1.95)
+						end
+					else
+						unit.Selected = false
+						if numSelected() == 0 then
+							preview:Destroy()
+							preview = nil
+							previewWall:Destroy()
+							previewWall=nil
+							previewGarr:Destroy()
+							previewGarr=nil
+						end
+					end
+				end
+			end
+		end)
+		con3 = RunService.Heartbeat:Connect(function()
+			if previewPart and previewWall and previewGarr then
+				local rayStart = Vector3.new(mouse.hit.Position.X, mouse.hit.Position.Y + 50, mouse.hit.Position.Z)
+				local raycastResult = workspace:Raycast(rayStart, Vector3.new(0, -100, 0), raycastParams)
+				if raycastResult then
+					local PrevLength = 0
+					local selectedLength = 0
+					--[[for i, v in pairs(CurrentUnits) do
+						if v.Selected == true then
+							PrevLength = PrevLength + v.Regiment:FindFirstChild("PrevRowLength").Value
+						end
+					end]]
+					for i, v in pairs(CurrentUnits) do
+						if v.Selected == true then
+							selectedLength = selectedLength + v.Regiment:FindFirstChild("PrevRowLength").Value*v.Regiment:FindFirstChild("Spacing").Value
+							selectedLength+=2
+						end
+					end
+					previewPart.Position = Vector3.new(raycastResult.Position.X, raycastResult.Position.Y+0.4, raycastResult.Position.Z)
+					previewUnit.Size = Vector3.new(selectedLength, 1, 2)
+					previewUnit.CFrame = previewPart.CFrame*CFrame.new(0,0,6)
+					local IsQDown = UserInputService:IsKeyDown(Enum.KeyCode.Q)
+					local IsEDown = UserInputService:IsKeyDown(Enum.KeyCode.E)
+					local spin = previewPart.Orientation
+					if IsQDown then
+						previewPart.Orientation = Vector3.new(0,spin.Y + 5, 0)
+					elseif IsEDown then
+						previewPart.Orientation = Vector3.new(0,spin.Y + -5, 0)
+					end
+					TestPart1.CFrame = previewUnit.CFrame*CFrame.new(-selectedLength/2,0,0)
+					TestPart2.CFrame = previewUnit.CFrame*CFrame.new(selectedLength/2,0,0)
+					if inBounds(TestPart1.Position) and inBounds(TestPart2.Position) and CollectionService:HasTag(mouse.Target:FindFirstAncestorOfClass("Folder"), "GarrisonSpot") and numSelected() == 1 then
+						spot = mouse.Target:FindFirstAncestorOfClass("Folder")
+						onWall = false
+						onSpot = true
+						print("on a spot")
+						previewGarr.Position = spot:FindFirstChild("IconSpot").Position
+						previewGarr.Transparency = 0.2
+						for i,v in pairs(previewWall:GetChildren()) do
+							v.Transparency = 1
+						end
+						previewPart.Transparency = 1
+						previewUnit.Transparency = 1
+					elseif inBounds(TestPart1.Position) and inBounds(TestPart2.Position) and CollectionService:HasTag(mouse.Target, "WallSpot") and numSelected() == 1 then
+						wall = mouse.Target
+						--print("on a wall")
+						onSpot = false
+						onWall = true
+						previewWall.Arrow.Position = previewPart.Position
+						previewWall.Arrow.Orientation = Vector3.new(0,mouse.Target.Orientation.Y,0)
+						previewWall.Icon.CFrame = previewWall.Arrow.CFrame*CFrame.new(0,1,4)
+						for i,v in pairs(previewWall:GetChildren()) do
+							v.Transparency = 0.2
+						end
+						previewPart.Transparency = 1
+						previewUnit.Transparency = 1
+					elseif inBounds(TestPart1.Position) and inBounds(TestPart2.Position) then
+						onSpot = false
+						onWall = false
+						goalPos = previewUnit.CFrame*CFrame.new(-selectedLength/2,0,0)
+						previewGarr.Transparency = 1
+						for i,v in pairs(previewWall:GetChildren()) do
+							v.Transparency = 1
+						end
+						previewPart.Transparency = 0
+						previewUnit.Transparency = 0
+					else
+						onSpot = false
+						onWall = false
+						previewGarr.Transparency = 1
+						for i,v in pairs(previewWall:GetChildren()) do
+							v.Transparency = 1
+						end
+						previewPart.Transparency = 0.8
+						previewUnit.Transparency = 0.8
+					end
+				end
+			end
+		end)
+		con4 = UserInputService.InputBegan:Connect(function(input)
+			--[[local isMDown = UserInputService:IsKeyDown(Enum.KeyCode.M)
+			if isMDown then
+				print("aaah")
+				for i, v in pairs(CollectionService:GetTagged("GoToPart")) do
+					if v.Transparency == 1 and v:FindFirstAncestor("GameObjects") then
+						v.Transparency = 0.9
+						CollectionService:AddTag(v,"TempShow")
+					end
+				end
+			elseif not isMDown then
+				print("oooh")
+				for i, v in pairs(CollectionService:GetTagged("GoToPart")) do
+					if v.Transparency < 1 and CollectionService:HasTag(v,"TempShow") and v:FindFirstAncestor("GameObjects") then
+						v.Transparency = 1
+						CollectionService:RemoveTag(v,"TempShow")
+					end
+				end
+			end]]
+			if numSelected() > 0 then
+				if input.KeyCode == Enum.KeyCode.One then
+					for i, unit in pairs(CurrentUnits) do
+						if unit.Selected == true then
+							RowUpdate:FireServer(unit.Regiment, "Short")
+						end
+					end
+				elseif input.KeyCode == Enum.KeyCode.Two then
+					for i, unit in pairs(CurrentUnits) do
+						if unit.Selected == true then
+							RowUpdate:FireServer(unit.Regiment, "Medium")
+						end
+					end
+				elseif input.KeyCode == Enum.KeyCode.Three then
+					for i, unit in pairs(CurrentUnits) do
+						if unit.Selected == true then
+							RowUpdate:FireServer(unit.Regiment, "Long")
+						end
+					end
+				elseif input.KeyCode == Enum.KeyCode.R then
+					for i, unit in pairs(CurrentUnits) do
+						if unit.Selected == true then
+							AttackModeUpdater:FireServer(unit.Regiment, "Formation")
+						end
+					end
+				elseif input.KeyCode == Enum.KeyCode.F then
+					for i, unit in pairs(CurrentUnits) do
+						if unit.Selected == true then
+							AttackModeUpdater:FireServer(unit.Regiment, "AttackMode")
+						end
+					end
+				end
+			end
+		end)
+		con5 = mouse.Button1Down:Connect(function()
+			click1 = true
+			wait(0.2)
+			click1 = false
+			return end)
+		con6 = mouse.Button2Down:Connect(function()
+			click2 = true
+			wait(0.2)
+			click2 = false
+			return end)
+		con7 = mouse.Button2Up:Connect(function()
+			if click2 then
+				if numSelected() > 0 and not hoveringOnEnemy then
+					if currentSound then currentSound:Stop() end
+					if currentOtherRegi then
+						otherHighlight(currentOtherRegi, false)
+						currentOtherRegi = nil
+					end
+					local moveBegan = false
+					local PrevUnit
+					local index = 1
+					local moveIndex = 1
+					local temp = {}
+					for i, v in pairs(CurrentUnits) do
+						if v.Selected then
+							table.insert(temp, v)
+						end
+					end
+					local moveOrder = {}
+					while #temp > 0 do
+						local mostLeft = 1
+						local mostLeftValue = isLeft(goalPos, temp[mostLeft].Regiment:FindFirstChild("UnitMarker").Position, 2)
+						for i, unit in pairs(temp) do
+							local leftValue = isLeft(goalPos, unit.Regiment:FindFirstChild("UnitMarker").Position, 2)
+							if  leftValue > mostLeftValue then
+								--print(tostring(unit.Regiment) .. " is more left than " .. tostring(temp[mostLeft].Regiment))
+								mostLeft = i
+								mostLeftValue = leftValue 
+							end
+						end
+						table.insert(moveOrder, table.remove(temp, mostLeft))
+					end
+					--print("Moving:")
+					while numSelected()>0 do
+						for i, v in pairs(moveOrder) do
+							--if v.Index == index then
+							if v.Selected == true then
+								--print(v.Regiment)
+								if not moveBegan then
+									moveBegan = true
+									if onSpot then
+										UnitMover:FireServer("Move", "Garrison", index, goalPos, v.Regiment, spot)
+									elseif onWall then
+										goalPos = previewWall.Arrow.CFrame
+										UnitMover:FireServer("Move", "Wall", index, goalPos, v.Regiment, wall)
+									else
+										UnitMover:FireServer("Move", "Mainpos", index, goalPos, v.Regiment)
+									end
+								else
+									UnitMover:FireServer("Move", "Otherpos", index, goalPos, v.Regiment, PrevUnit.Regiment)
+								end
+								PrevUnit = v
+								Highlight(v.Regiment, false)	
+								v.Selected = false
+							end
+							--end
+						end
+						--index+=1
+					end
+					preview:Destroy()
+					preview=nil
+					previewWall:Destroy()
+					previewWall=nil
+					previewGarr:Destroy()
+					previewGarr=nil
+					if currentSound then currentSound:Stop() end
+					local Sounds = MoveSounds:GetChildren()
+					currentSound = Sounds[math.random(#Sounds)]
+					playSound(currentSound, 2)
+				end	
+			end
+		end)
+		con8 = mouse.Button1Down:Connect(function()
+			local Slope1, Slope2
+			local buttonUp
+			local drag
+			local selectGui = Player.PlayerGui.DragGui.Frame
+			selectGui.Parent.Enabled = true
+			local origpos = selectGui.AbsolutePosition
+			local desiredPos = Vector2.new(mouse.X,mouse.Y)
+			local relativePosition = desiredPos - origpos
+			selectGui.Position = UDim2.fromOffset(mouse.X,mouse.Y)
+			local origpos = selectGui.AbsolutePosition
+			local rel=workspace.CurrentCamera.CoordinateFrame:pointToObjectSpace(mouse.Hit.p);
+			Slope1=Vector2.new(rel.x/-rel.z, rel.y/-rel.z)
+			drag = RunService.Heartbeat:Connect(function()
+				desiredPos = Vector2.new(mouse.X,mouse.Y)
+				relativePosition = desiredPos - origpos
+				selectGui.Size = UDim2.fromOffset(relativePosition.X,relativePosition.Y)
+			end)
+			buttonUp = mouse.Button1Up:Connect(function()
+				buttonUp:Disconnect()
+				drag:Disconnect()
+				local rel=workspace.CurrentCamera.CoordinateFrame:pointToObjectSpace(mouse.Hit.p);
+				Slope2=Vector2.new(rel.x/-rel.z, rel.y/-rel.z)
+				selectGui.Parent.Enabled = false
+				selectGui.Size = UDim2.new(0,0,0,0)
+				local unitMarkers = {}
+				local soldierRoots = {}
+				
+				for i, unit in pairs(CurrentUnits) do
+					table.insert(unitMarkers, unit.Regiment:FindFirstChild("UnitMarker"))
+				end
+				local selectedParts = Search(unitMarkers, Slope1, Slope2);
+				for i, unit in pairs(CurrentUnits) do
+					for i, part in pairs(selectedParts) do
+						if part.Parent == unit.Regiment then
+							SelectCheck:FireServer(unit.Regiment)
+						end
+						--break
+						
+					end
+				end
+				
+				--[[for i, unit in pairs(CurrentUnits) do
+					for i, Soldier in pairs(unit.Regiment:FindFirstChild("Dummies"):GetChildren()) do
+						table.insert(soldierRoots, Soldier:FindFirstChild("HumanoidRootPart"))
+					end
+				end
+				local selectedRoots = Search(soldierRoots, Slope1, Slope2);
+				for i, unit in pairs(CurrentUnits) do
+					if unit.Selected == false then
+						print("aaaah")
+						for i, part in pairs(selectedRoots) do
+							if part.Parent.Parent.Parent == unit.Regiment then
+								SelectCheck:FireServer(unit.Regiment)
+							end
+							--break
+						end
+					end
+				end]]
+			end)
+		end)
+		con9 = UnitTargeter.OnClientEvent:Connect(function(Action, Regiment, GoToPart)
+			if Action == "Hover" then
+				mouseHover = true
+				otherHighlight(Regiment, true)
+			end
+			if Action == "Hover end" then
+				mouseHover = false
+				otherHighlight(Regiment, false)
+			end
+			if Action == "Target" then
+				--print("got target action")
+				if numSelected()>0 then
+					preview:Destroy()
+					preview=nil
+					previewWall:Destroy()
+					previewWall=nil
+					previewGarr:Destroy()
+					previewGarr=nil
+					for i, unit in pairs(CurrentUnits) do
+						if unit.Selected == true then
+							Highlight(unit.Regiment, false)	
+							unit.Selected = false
+							--print("Sending target to selected unit")
+							UnitTargeter:FireServer(unit.Regiment, Regiment)
+						end
+					end
+					if currentSound then currentSound:Stop() end
+					local Sounds = TargetSounds:GetChildren()
+					currentSound = Sounds[math.random(#Sounds)]
+					playSound(currentSound, 2)
+				end
+			end
+		end)
+		--[[con7 = mouse.Button2Up:Connect(function()
+			if click2 then
+				if numSelected() > 0 then
+					if currentSound then currentSound:Stop() end
+					local PrevUnit
+					--[[
+				for i,v in pairs(SelectedUnits) do
+					if i == 1 then
+						UnitMover:FireServer("Move", "Mainpos", i, previewPart.CFrame, v)
+						FirstUnit = v
+					elseif i ~= 1 then
+						UnitMover:FireServer("Move", "Otherpos", i, previewPart.CFrame, v, FirstUnit)
+					end
+				end
+				
+				for i, v in pairs (SelectedUnits) do
+					Highlight(v, false)
+					SelectedUnits [i] = nil
+				end
+		
+					print("Moving:")
+					for i, v in pairs(CurrentUnits) do
+						if v.Selected == true then
+							print(v.Regiment)
+						end
+					end
+					local index = 1
+					local moveIndex = 1
+					for i, v in pairs(CurrentUnits) do
+						if v.Selected == true then
+							break
+						else
+							index+=1
+						end
+					end
+					local v = CurrentUnits[index]
+					PrevUnit = v
+					v.Selected = false
+					UnitMover:FireServer("Move", "Mainpos", index, previewPart.CFrame, v.Regiment)
+					Highlight(v.Regiment, false)	
+					index+=1
+					moveIndex += 1
+					while numSelected() > 0 do
+						local a = CurrentUnits[index]
+						if a.Selected == true then
+							UnitMover:FireServer("Move", "Otherpos", moveIndex, previewPart.CFrame, a.Regiment, PrevUnit.Regiment)
+							Highlight(a.Regiment, false)	
+							a.Selected = false
+							moveIndex+=1
+							PrevUnit = a
+						end
+						index+=1
+					end
+					preview:Destroy()
+					if currentSound then currentSound:Stop() end
+					local Sounds = MoveSounds:GetChildren()
+					currentSound = Sounds[math.random(#Sounds)]
+					playSound(currentSound, 2)
+				end
+			end
+			return end)]]--
+		canEnd = true
+	elseif Event == "End" then
+		print("game ended")
+		if not canEnd then return end
+		canEnd = false
+		for i in pairs(CurrentUnits) do
+			CurrentUnits[i] =  nil
+		end
+		con1:Disconnect()
+		con2:Disconnect()
+		con3:Disconnect()
+		con4:Disconnect()
+		con5:Disconnect()
+		con6:Disconnect()
+		con7:Disconnect()
+		con8:Disconnect()
+		con9:Disconnect()
+		canStart = true
+	end
+end)	
