@@ -1,0 +1,108 @@
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local Players = game:GetService("Players") -- whole
+
+local ClientComm = ReplicatedStorage:WaitForChild("GameOrg"):WaitForChild("ClientComm")
+
+local ClientGameAlerts = ClientComm:WaitForChild("ClientGameAlerts")
+local CollectionService = game:GetService("CollectionService")
+local StatusCheck = ClientComm:WaitForChild("StatusCheck") --whole 
+
+local mapSize = 2000
+
+local mapGui = script.Parent
+local map = mapGui.Map
+local playerMark = map.Player
+local Player = Players.LocalPlayer
+local origin = UDim2.fromScale(map.Size.X.Scale/2, map.Size.Y.Scale/2)
+local GameUnits = {}
+local icon = script.Icon
+
+local fps = 5
+local count = 0
+
+--Regiment Class
+Unit = {}
+Unit.__index = Unit
+function Unit.new(regiment)
+	local newUnit = {}
+	newUnit.unit = regiment -- the referred regiment in the game
+	--regiment instance data
+	newUnit.visible = false
+	newUnit.morale = true
+	newUnit.active = true
+	newUnit.marker = regiment.UnitMarker
+	newUnit.owner = regiment.Owner.Value
+	newUnit.icon = nil
+	
+	setmetatable(newUnit, Unit)
+	return newUnit
+end
+function updateMap()
+	if Player.Character then
+		local relPos = UDim2.fromScale(Player.Character.HumanoidRootPart.Position.X/mapSize+0.5, Player.Character.HumanoidRootPart.Position.Z/mapSize+0.5 )
+		playerMark.Position = relPos
+	end
+	for i, unit in pairs(GameUnits) do
+		unit.active, unit.visible, unit.morale = StatusCheck:InvokeServer(unit.unit)
+		if unit.active and unit.marker then
+			if unit.visible or unit.owner == tostring(Player) or Players:FindFirstChild(unit.owner).Team == Player.Team then
+				if unit.owner == tostring(Player) then
+					unit.icon.BackgroundColor3 = Color3.new(0, 0.333333, 0.498039)
+				elseif Players:FindFirstChild(unit.owner).Team == Player.Team then
+					unit.icon.BackgroundColor3 = Color3.new(0, 0.666667, 1)
+				else
+					unit.icon.BackgroundColor3 = Color3.new(1, 0, 0)
+				end
+				if unit.morale then
+					unit.icon.BackgroundTransparency = 0
+				else
+					unit.icon.BackgroundTransparency = 0.4
+				end
+				local relPos = UDim2.fromScale(unit.marker.Position.X/mapSize+0.5,unit.marker.Position.Z/mapSize+0.5)
+				unit.icon.Position = relPos
+			else
+				unit.icon.BackgroundTransparency = 1
+			end
+		else
+			if unit.icon then
+				unit.icon:Destroy()
+				unit.icon = nil
+			end
+		end
+	end
+end
+ClientGameAlerts.OnClientEvent:Connect(function(Event)
+	if Event == "Start" then
+		mapSize = workspace:WaitForChild("GameMap").Size.Value
+		mapGui.Map.Image = workspace:WaitForChild("GameMap"):FindFirstChildOfClass("Decal").Texture
+		mapGui.Map.Visible = true
+		print("got start")
+		wait()
+		for i, unit in pairs(CollectionService:GetTagged("Unit")) do
+			local unitsArmy = unit:FindFirstAncestorOfClass("Folder")
+			if unitsArmy then
+				local newRegi = Unit.new(unit)
+				local newMarker = icon:Clone()
+				newMarker.Parent = map
+				newRegi.icon = newMarker 
+				table.insert(GameUnits, newRegi)
+			end
+		end
+	elseif Event == "End" then
+		while #GameUnits > 0 do
+			local unit = table.remove(GameUnits, 1)
+			if unit.icon then
+				unit.icon:Destroy()
+			end
+			unit = nil
+		end
+	end
+end)
+
+game:GetService("RunService").Heartbeat:Connect(function()
+	count+=1
+	if count >= 60/fps then
+		count = 0
+		updateMap()
+	end
+end)
