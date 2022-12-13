@@ -1,0 +1,11 @@
+local TeleportService = game:GetService("TeleportService")
+local TPInfo = game.ReplicatedStorage.GameOrg.GameManagementEvents.TPInfo
+
+
+local teleportData = TeleportService:GetLocalPlayerTeleportData()
+
+if teleportData then
+	print("Local player arrived with this data:", teleportData)
+
+	TPInfo:FireServer(teleportData)
+end
