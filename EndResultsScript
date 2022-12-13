@@ -1,0 +1,145 @@
+local ReplicatedStorage = game.ReplicatedStorage
+--local RealGameEvents = RepStorage["Real Game Events"]
+local ClientComm = ReplicatedStorage:WaitForChild("GameOrg"):WaitForChild("ClientComm")
+local CollectionService = game:GetService("CollectionService")
+--local SendUnits = RepStorage:FindFirstChild("SendUnits")
+local mainScreen = script.Parent
+local mainUI = mainScreen.Frame
+--local funds = 1500
+local Players = game:GetService("Players")
+
+local localPlayer = Players.LocalPlayer
+
+mainUI.Back.MouseButton1Click:Connect(function()
+	ClientComm.Event:FireServer()
+end)
+
+ClientComm.ClientGameAlerts.OnClientEvent:Connect(function(event, winner)
+	if event ~= "End" then return end
+	local team1Kills = 0
+	local team1Deaths = 0
+	local team2Kills = 0
+	local team2Deaths = 0
+	for i, player in pairs(Players:GetChildren()) do
+		for i, info in pairs(player.Units:GetChildren()) do
+			local newBut = ReplicatedStorage.GamePieces.Button:Clone()
+			newBut.Text = info.Name
+			newBut.NameLabel.Text = info.Name
+			newBut.Kills.Text = newBut.Kills.Text .. " " .. tostring(info.Kills.Value)
+			newBut.Kills.Visible = true
+			newBut.NameLabel.Text = info.Name
+			newBut.Troops.Text = newBut.Troops.Text .. " " .. tostring(info.TroopsLeft.Value) .. "/" .. tostring(info.Troops.Value)
+			newBut.Troops.Visible = true
+			if player.Team.Name == "Team1" then
+				team1Kills += info.Kills.Value
+				team1Deaths += (info.Troops.Value - info.TroopsLeft.Value)
+			else
+				team2Kills += info.Kills.Value
+				team2Deaths += (info.Troops.Value - info.TroopsLeft.Value)
+			end
+			for i, v in pairs(info:GetChildren()) do
+				if CollectionService:HasTag(v, "Stat") then
+					local newStat = newBut.StatLabel:Clone()
+					--local newStat = Instance.new("TextLabel")
+					newStat.Visible = true
+					newStat.Parent = newBut.InfoCard.Stats
+					newStat.Text = v.Name .. ": " .. tostring(v.Value)
+					if v.Name == "Cost" then
+						newBut.Cost.Value = v.Value
+					end
+				elseif v.Name == "Formation" then
+					local newStat = newBut.FormationLabel:Clone()
+					newStat.Visible = true
+					newStat.Parent = newBut.InfoCard.Formations
+					newStat.Text = v.Value .. ": " .. v.Info.Value
+				end	
+			end
+			local view = newBut.ViewportFrame
+
+			local previewSoldier 
+			if info.Value =="Infantry" then
+				previewSoldier = ReplicatedStorage.LocalPieces.LocalSoldier:Clone()
+				previewSoldier.Parent = workspace
+				if info.Name == "Rifles" then
+					previewSoldier.Weapons.Musket:Destroy()
+				else
+					previewSoldier.Weapons.Rifle:Destroy()
+					if info.Name == "Light Infantry" then
+						previewSoldier.Weapons.Musket.Bayonet:Destroy()
+					end
+				end
+
+				local weld = previewSoldier.Weapons:FindFirstChildOfClass("Model").WeldPart.Weld
+				local MusketShoulder = previewSoldier.AnimationsR6.MusketR6.Shoulder
+				local shoulderMusket = previewSoldier.Humanoid:LoadAnimation(MusketShoulder)
+				weld.Part0 = previewSoldier["Right Arm"]
+				weld.C0 = CFrame.new(0,0,0)*CFrame.Angles(math.rad(0), math.rad(0), math.rad(180))
+				shoulderMusket:Play()
+			else
+				previewSoldier = ReplicatedStorage.LocalPieces.LocalRider:Clone()
+				previewSoldier.Parent = workspace
+				local horseColors = ReplicatedStorage.Customization["Horse Colors"].Body:GetChildren()
+				local horseColor = BrickColor.new(horseColors[math.random(#horseColors)].Name)
+				local horseHairs = ReplicatedStorage.Customization["Horse Colors"].Mane:GetChildren()
+				local horseHair = BrickColor.new(horseHairs[math.random(#horseHairs)].Name)
+				for i, v in pairs(previewSoldier:GetChildren()) do
+					if CollectionService:HasTag(v, "HorseBodyParts") then
+						v.BrickColor = horseColor
+					elseif CollectionService:HasTag(v, "HorseHairParts") then
+						v.BrickColor = horseHair
+					end
+				end
+				if info.Name == "Lancers" then
+					previewSoldier.Weapons.Sword:Destroy()
+				else
+					previewSoldier.Weapons.Lance:Destroy()
+				end
+				local IdleAnim = previewSoldier.AnimationsR6.Horse.IdleAnim
+				local PlayIdle = previewSoldier.Humanoid:LoadAnimation(IdleAnim)
+				PlayIdle:Play()
+			end
+			local faces = ReplicatedStorage.Customization.Faces:GetChildren()
+			local face = faces[math.random(#faces)]
+			local newFace = face:Clone()
+			newFace.Parent = previewSoldier.Head
+			local soldierTones = ReplicatedStorage.Customization["Skin Tones"]:GetChildren()
+			local soldierTone = BrickColor.new(soldierTones[math.random(#soldierTones)].Name)
+			for i, v in pairs(previewSoldier:GetChildren()) do
+				if CollectionService:HasTag(v, "SoldierBodyParts") then
+					v.BrickColor = soldierTone
+				end
+			end
+			previewSoldier.Parent = view.WorldModel
+			local previewCamera = Instance.new("Camera")
+			view.CurrentCamera = previewCamera
+			--previewCamera.Parent = view
+			local uniform = info.Uniforms[workspace.GameObjects:FindFirstChild(player.Team.Name).Nation.Value]
+			if uniform ~= nil then
+				for i, item in pairs(uniform:GetChildren()) do
+					if item:IsA("Shirt") or item:IsA("Pants") then
+						local newItem = item:Clone()
+						newItem.Parent = previewSoldier
+					end
+				end
+			else print("Something happened") end
+
+			previewCamera.CFrame = CFrame.new(previewSoldier.CameraPart.Position,previewSoldier.HumanoidRootPart.Position)
+			newBut.Parent = mainUI:FindFirstChild(player.Team.Name).Units
+			
+		end
+	end
+	if winner~="Tie" then
+		mainUI.EndResult.Text = ReplicatedStorage.Nations:FindFirstChild(workspace.GameObjects:FindFirstChild(winner).Nation.Value).Adjective.Value .. " victory"
+		mainUI.EndResult.TextColor3 = ReplicatedStorage.Nations:FindFirstChild(workspace.GameObjects:FindFirstChild(winner).Nation.Value).Color.Value
+	else
+		mainUI.EndResult.Text = "Stalemate"
+	end
+	mainUI.Team1.Nation.Text = workspace.GameObjects.Team1.Nation.Value
+	mainUI.Team1.Stats.Kills.Text = "Total kills: " .. tostring(team1Kills)
+	mainUI.Team1.Stats.Lost.Text = "Total deaths: " .. tostring(team1Deaths)
+	mainUI.Team2.Nation.Text = workspace.GameObjects.Team2.Nation.Value
+	mainUI.Team2.Stats.Kills.Text = "Total kills: " .. tostring(team2Kills)
+	mainUI.Team2.Stats.Lost.Text = "Total deaths: " .. tostring(team2Deaths)
+	 
+	mainScreen.Enabled = true
+end)
