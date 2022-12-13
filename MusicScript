@@ -1,0 +1,70 @@
+local battleMusic = workspace.GameObjects.BattleMusic
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+local BattleEvents = ReplicatedStorage:WaitForChild("GameOrg"):WaitForChild("BattleEvents")
+local ClientComm = ReplicatedStorage:WaitForChild("GameOrg"):WaitForChild("ClientComm")
+local GameManagementEvents = ReplicatedStorage:WaitForChild("GameOrg"):WaitForChild("GameManagementEvents")
+
+local StartRealGame = GameManagementEvents:FindFirstChild("StartRealGame")
+local EndSetup = GameManagementEvents:WaitForChild("EndSetup") --whole 
+local setup = false
+local gameOn = false
+local EndGame = GameManagementEvents:WaitForChild("EndGame")
+local currentSong
+local maxVolume
+local connection
+
+StartRealGame.Event:Connect(function()
+	setup = true
+	while setup do
+		local songs = battleMusic.SetupMusic:GetChildren()
+		currentSong = songs[math.random(#songs)]
+		currentSong.Volume = 0
+		print("playing song")
+		connection = currentSong.Played:Connect(function()
+			currentSong.Volume = 0.2
+			print("Setup Song")
+			repeat
+				currentSong.Volume+=0.005
+				wait(0.25)
+			until currentSong.Playing == false or currentSong.Volume >=0.4
+		end)
+		currentSong:Play()
+		currentSong.Ended:wait()
+		connection = nil
+		wait(4)
+	end
+end)
+EndSetup.Event:Connect(function()
+	setup = false
+	gameOn = true
+	while gameOn do
+		local songs = battleMusic.InGameMusic:GetChildren()
+		currentSong = songs[math.random(#songs)]
+		maxVolume = currentSong.Volume
+		currentSong.Volume = 0
+		print("playing song")
+		connection = currentSong.Played:Connect(function()
+			currentSong.Volume = 0.05
+			print("In Game Song")
+			repeat
+				currentSong.Volume+=0.0025
+				wait(1)
+			until currentSong.Playing == false or currentSong.Volume >= maxVolume
+		end)
+		currentSong:Play()
+		currentSong.Ended:wait()
+		connection = nil
+		wait(6)
+	end
+end)
+
+EndGame.Event:Connect(function()
+	gameOn = false
+	currentSong.Playing = false
+	for i, v in pairs(battleMusic:GetDescendants()) do
+		if v:IsA("Sound") then	
+			v.Volume = 0
+		end
+	end
+end)
