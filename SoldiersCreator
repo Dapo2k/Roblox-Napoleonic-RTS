@@ -1,0 +1,47 @@
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+local BattleEvents = ReplicatedStorage:WaitForChild("GameOrg"):WaitForChild("BattleEvents")
+local ClientComm = ReplicatedStorage:WaitForChild("GameOrg"):WaitForChild("ClientComm")
+local GameManagementEvents = ReplicatedStorage:WaitForChild("GameOrg"):WaitForChild("GameManagementEvents")
+
+--local AdminCommands = ReplicatedStorage:WaitForChild("AdminCommands")
+local CollectionService = game:GetService("CollectionService")
+--local StartGame = ReplicatedStorage:WaitForChild("StartGame")
+local CreateSoldier = GameManagementEvents:WaitForChild("CreateSoldier")
+
+CreateSoldier.OnInvoke = function(unit, unitCard)
+	local dummy
+	if unit.UnitFamily.Value == "Cavalry" then
+		dummy = ReplicatedStorage.GamePieces:FindFirstChild("ServerRider"):Clone()
+	else
+		dummy = ReplicatedStorage.GamePieces:FindFirstChild("ServerSoldier"):Clone()
+	end
+	dummy.Parent = unit:FindFirstChild("Dummies")
+	dummy.Humanoid.MaxHealth = unitCard.Health.Value
+	dummy.Humanoid.Health = unitCard.Health.Value
+	local faces = ReplicatedStorage.Customization.Faces:GetChildren()
+	local face = faces[math.random(#faces)]
+	local newFace = face:Clone()
+	newFace.Parent = dummy:FindFirstChild("Humanoid")
+	local soldierTones = ReplicatedStorage.Customization["Skin Tones"]:GetChildren()
+	local soldierTone = BrickColor.new(soldierTones[math.random(#soldierTones)].Name)
+	for i, v in pairs(dummy:GetChildren()) do
+		if CollectionService:HasTag(v, "SoldierBodyParts") then
+			v.BrickColor = soldierTone
+		end
+	end
+	if unit:FindFirstChild("UnitFamily").Value == "Cavalry" then
+		local horseColors = ReplicatedStorage.Customization["Horse Colors"].Body:GetChildren()
+		local horseColor = BrickColor.new(horseColors[math.random(#horseColors)].Name)
+		local horseHairs = ReplicatedStorage.Customization["Horse Colors"].Mane:GetChildren()
+		local horseHair = BrickColor.new(horseHairs[math.random(#horseHairs)].Name)
+		for i, v in pairs(dummy:GetChildren()) do
+			if CollectionService:HasTag(v, "HorseBodyParts") then
+				v.BrickColor = horseColor
+			elseif CollectionService:HasTag(v, "HorseHairParts") then
+				v.BrickColor = horseHair
+			end
+		end
+	end
+	return dummy
+end 
