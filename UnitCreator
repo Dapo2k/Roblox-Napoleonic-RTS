@@ -1,0 +1,88 @@
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+local BattleEvents = ReplicatedStorage:WaitForChild("GameOrg"):WaitForChild("BattleEvents")
+local ClientComm = ReplicatedStorage:WaitForChild("GameOrg"):WaitForChild("ClientComm")
+local GameManagementEvents = ReplicatedStorage:WaitForChild("GameOrg"):WaitForChild("GameManagementEvents")
+
+--local AdminCommands = ReplicatedStorage:WaitForChild("AdminCommands")
+local CollectionService = game:GetService("CollectionService")
+--local StartGame = ReplicatedStorage:WaitForChild("StartGame")
+local CreateSoldier = GameManagementEvents:WaitForChild("CreateSoldier")
+local CreateUnit = GameManagementEvents:WaitForChild("CreateUnit")
+local rowLength = 12
+
+local function getRow(index, RowLength)
+	local row = math.ceil(index/RowLength)
+	return row
+end
+
+CreateUnit.OnInvoke = function(unitCard, player, team, extra)
+	local newUnit = ReplicatedStorage:FindFirstChild("Regiment"):Clone()
+	newUnit.Name = unitCard.Name
+	newUnit.UnitType.Value = unitCard.Name
+	newUnit.UnitFamily.Value = unitCard.Value
+	local unitProfile = newUnit:FindFirstChild("UnitProfile")
+	for i, v in pairs(unitCard:GetChildren()) do
+		if v:IsA("IntValue") then
+			local newStat = unitProfile.StatLabel:Clone()
+			newStat.Visible = true
+			newStat.Parent = unitProfile.Stats
+			newStat.Text = v.Name .. ": " .. tostring(v.Value)
+		end
+	end
+	local unitsInArmy = 0
+	for i, v in pairs(CollectionService:GetTagged("Army")) do
+		if v.Name == team then
+			for i, thing in pairs(v:GetChildren()) do
+				if thing:IsA("Folder") then
+					unitsInArmy = unitsInArmy + 1
+				end
+			end
+			newUnit.Parent = v
+		end
+	end
+	newUnit:FindFirstChild("Owner").Value = player.Name
+	local soldiersInUnit = unitCard.Troops.Value
+	local GoToPart = newUnit:FindFirstChild("GoToPart")
+	for i, v in pairs (CollectionService:GetTagged("StartMarker")) do
+		if v.Name == team .. extra then
+			if GoToPart ~= nil then 
+				if unitsInArmy < 1 then
+					GoToPart.CFrame = v:FindFirstChild("StartPosition").CFrame
+				elseif unitsInArmy >= 1 then
+					GoToPart.CFrame = v:FindFirstChild("StartPosition").CFrame*CFrame.new(rowLength*7*(unitsInArmy), 0, 0)
+				end
+			else
+				print("No go to part")
+			end
+		end
+	end
+	for i, v in pairs(newUnit:GetChildren()) do
+		if v:IsA("BasePart") or v:IsA("UnionOperation") then
+			v.Position = Vector3.new(GoToPart.Position.X, v.Position.Y, GoToPart.Position.Z)
+		end
+	end
+	for i = 1, soldiersInUnit, 1 do
+		local dummy = CreateSoldier:Invoke(newUnit, unitCard)
+		wait()
+		local thisRowLength = rowLength
+		if dummy:FindFirstChild("Humanoid").Health > 0 then
+			local row = getRow(i, thisRowLength)
+					--[[local odd = i%2
+					local num = 0
+					if odd == 0 then
+						num = (i - (row-1)*rowLength)/2
+						dummy:FindFirstChild("GoToPart").CFrame = GoToPart.CFrame*CFrame.new(num*-4,0,6*(row-1))
+					else
+						num = ((i - (row-1)*rowLength)-1)/2
+						dummy:FindFirstChild("GoToPart").CFrame = GoToPart.CFrame*CFrame.new(num*4,0,6*(row-1))
+					end]]
+			local num = (i - (row-1)*thisRowLength)
+			dummy:FindFirstChild("GoToPart").CFrame = GoToPart.CFrame*CFrame.new(4*(num-thisRowLength/2),0,6*(row-1))
+			dummy:FindFirstChild("MoveToPart").CFrame = GoToPart.CFrame*CFrame.new(4*(num-thisRowLength/2),0,6*(row-1))
+			dummy:FindFirstChild("HumanoidRootPart").CFrame = dummy:FindFirstChild("GoToPart").CFrame*CFrame.new(0,4,0)
+		end
+	end
+	local unitGui = newUnit:FindFirstChild("Frame")
+	return newUnit
+end
